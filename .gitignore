@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.db
+*.db-shm
+*.db-wal
+.env
+*.firebase-svc.json
+*firebase-svc.json
+*firebase*service-account*.json

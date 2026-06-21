@@ -1,0 +1,17 @@
+{
+  "name": "VolunteerHub",
+  "short_name": "VolunteerHub",
+  "description": "Church volunteer scheduling and care",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6f2",
+  "theme_color": "#183d3d",
+  "icons": [
+    {
+      "src": "/volunteerhub-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

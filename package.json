@@ -1,0 +1,22 @@
+{
+  "name": "volunteerhub",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "mobile",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w backend\" \"npm run dev -w mobile\" \"npm run dev -w web\"",
+    "dev:mobile": "concurrently \"npm run dev -w backend\" \"npm run dev -w mobile\"",
+    "dev:web": "concurrently \"npm run dev -w backend\" \"npm run dev -w web\"",
+    "build": "npm run build -w backend && npm run build -w mobile && npm run build -w web",
+    "test": "npm run test -w backend",
+    "format": "prettier --write \"{backend,mobile,web}/src/**/*.{ts,tsx,css}\" \"*.{json,md}\" \"database/**/*.md\"",
+    "format:check": "prettier --check \"{backend,mobile,web}/src/**/*.{ts,tsx,css}\" \"*.{json,md}\" \"database/**/*.md\""
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3",
+    "prettier": "^3.6.2"
+  }
+}
