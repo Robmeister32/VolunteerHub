@@ -4,6 +4,8 @@ dist/
 *.db-shm
 *.db-wal
 .env
+.env*
 *.firebase-svc.json
 *firebase-svc.json
 *firebase*service-account*.json
+volunteerhub-dev-firebase-svc.json
