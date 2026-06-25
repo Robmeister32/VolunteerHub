@@ -2587,6 +2587,16 @@ form.audit-search {
   min-width: 0;
   max-width: 100%;
 }
+.campus-form .check-label {
+  justify-content: flex-start;
+  width: fit-content;
+  max-width: 100%;
+}
+.campus-form .check-label input {
+  flex: none;
+  width: auto;
+  min-width: auto;
+}
 .campus-form-title small {
   white-space: normal;
   overflow-wrap: anywhere;
