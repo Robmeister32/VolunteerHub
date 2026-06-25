@@ -4651,8 +4651,72 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
     setFormOpen(true);
   };
 
+  const closeForm = () => {
+    setEditing(null);
+    setFormOpen(false);
+  };
+
+  if (formOpen) {
+    return (
+      <>
+        <Breadcrumbs
+          items={[
+            { label: "Administration", onClick: close },
+            { label: "Campus Maintenance", onClick: closeForm },
+            { label: editing ? "Edit Campus" : "Add Campus" }
+          ]}
+        />
+        <PageTitle
+          eyebrow="Administration"
+          title={editing ? "Edit campus" : "Add campus"}
+          description={editing ? "Update this location's details." : "Create a new church location."}
+        />
+        <Card title={editing ? "Campus details" : "New campus"}>
+          <form className="campus-form campus-form-page" key={editing?.id ?? "new"} onSubmit={save}>
+            <div className="campus-form-title">
+              <span className="attention-icon teal">
+                <Building2 size={19} />
+              </span>
+              <div>
+                <strong>{editing ? "Edit campus" : "Add campus"}</strong>
+                <small>{editing ? "Update this location's details." : "Create a new church location."}</small>
+              </div>
+            </div>
+            <Field name="name" label="Campus name" defaultValue={editing?.name} />
+            <Field name="addressLine1" label="Address line 1" defaultValue={editing?.address_line_1} />
+            <OptionalField name="addressLine2" label="Address line 2" defaultValue={editing?.address_line_2} />
+            <div className="two-col">
+              <Field name="city" label="City" defaultValue={editing?.city} />
+              <Field name="region" label="State / region" defaultValue={editing?.region} />
+            </div>
+            <div className="two-col">
+              <Field name="postalCode" label="Postal code" defaultValue={editing?.postal_code} />
+              <Field name="countryCode" label="Country code" defaultValue={editing?.country_code ?? "US"} />
+            </div>
+            <div className="two-col">
+              <OptionalField name="latitude" label="Latitude" type="number" defaultValue={editing?.latitude} />
+              <OptionalField name="longitude" label="Longitude" type="number" defaultValue={editing?.longitude} />
+            </div>
+            <Field name="timezone" label="Timezone" defaultValue={editing?.timezone ?? "America/Chicago"} />
+            <label className="check-label">
+              <input name="isActive" type="checkbox" defaultChecked={editing?.is_active ?? true} />
+              Campus is active
+            </label>
+            <div className="card-actions">
+              <button className="primary">{editing ? "Save changes" : "Create campus"}</button>
+              <button className="secondary" type="button" onClick={closeForm}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </Card>
+      </>
+    );
+  }
+
   return (
     <>
+      <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Campus Maintenance" }]} />
       <PageTitle
         eyebrow="Administration"
         title="Campus maintenance"
@@ -4666,80 +4730,32 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
           </button>
         }
       >
-        <div className={formOpen ? "administration-grid" : ""}>
-          <div className="table campus-table">
-            {campuses.map((campus) => (
-              <div className="table-row" key={campus.id}>
-                <span className="attention-icon teal">
-                  <Building2 size={19} />
-                </span>
-                <span className="grow">
-                  <strong>{campus.name}</strong>
-                  <small>
-                    {campus.address_line_1}, {campus.city}, {campus.region} {campus.postal_code}
-                  </small>
-                </span>
-                <span className={`status ${campus.is_active ? "approved" : "inactive"}`}>
-                  {campus.is_active ? "Active" : "Inactive"}
-                </span>
-                <div className="campus-actions">
-                  <button className="secondary" onClick={() => openForm(campus)}>
-                    <Pencil size={15} /> Edit
-                  </button>
-                  <button className="secondary" onClick={() => toggleActive(campus)}>
-                    {campus.is_active ? "Deactivate" : "Activate"}
-                  </button>
-                </div>
-              </div>
-            ))}
-            {!campuses.length && <Empty text="No campuses have been configured." />}
-          </div>
-          {formOpen && (
-            <form className="campus-form" key={editing?.id ?? "new"} onSubmit={save}>
-              <div className="campus-form-title">
-                <span className="attention-icon teal">
-                  <Building2 size={19} />
-                </span>
-                <div>
-                  <strong>{editing ? "Edit campus" : "Add campus"}</strong>
-                  <small>{editing ? "Update this location's details." : "Create a new church location."}</small>
-                </div>
-              </div>
-              <Field name="name" label="Campus name" defaultValue={editing?.name} />
-              <Field name="addressLine1" label="Address line 1" defaultValue={editing?.address_line_1} />
-              <OptionalField name="addressLine2" label="Address line 2" defaultValue={editing?.address_line_2} />
-              <div className="two-col">
-                <Field name="city" label="City" defaultValue={editing?.city} />
-                <Field name="region" label="State / region" defaultValue={editing?.region} />
-              </div>
-              <div className="two-col">
-                <Field name="postalCode" label="Postal code" defaultValue={editing?.postal_code} />
-                <Field name="countryCode" label="Country code" defaultValue={editing?.country_code ?? "US"} />
-              </div>
-              <div className="two-col">
-                <OptionalField name="latitude" label="Latitude" type="number" defaultValue={editing?.latitude} />
-                <OptionalField name="longitude" label="Longitude" type="number" defaultValue={editing?.longitude} />
-              </div>
-              <Field name="timezone" label="Timezone" defaultValue={editing?.timezone ?? "America/Chicago"} />
-              <label className="check-label">
-                <input name="isActive" type="checkbox" defaultChecked={editing?.is_active ?? true} />
-                Campus is active
-              </label>
-              <div className="card-actions">
-                <button className="primary">{editing ? "Save changes" : "Create campus"}</button>
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={() => {
-                    setEditing(null);
-                    setFormOpen(false);
-                  }}
-                >
-                  Cancel
+        <div className="table campus-table">
+          {campuses.map((campus) => (
+            <div className="table-row" key={campus.id}>
+              <span className="attention-icon teal">
+                <Building2 size={19} />
+              </span>
+              <span className="grow">
+                <strong>{campus.name}</strong>
+                <small>
+                  {campus.address_line_1}, {campus.city}, {campus.region} {campus.postal_code}
+                </small>
+              </span>
+              <span className={`status ${campus.is_active ? "approved" : "inactive"}`}>
+                {campus.is_active ? "Active" : "Inactive"}
+              </span>
+              <div className="campus-actions">
+                <button className="secondary" onClick={() => openForm(campus)}>
+                  <Pencil size={15} /> Edit
+                </button>
+                <button className="secondary" onClick={() => toggleActive(campus)}>
+                  {campus.is_active ? "Deactivate" : "Activate"}
                 </button>
               </div>
-            </form>
-          )}
+            </div>
+          ))}
+          {!campuses.length && <Empty text="No campuses have been configured." />}
         </div>
       </Card>
     </>

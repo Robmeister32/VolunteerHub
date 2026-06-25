@@ -2574,6 +2574,9 @@ form.audit-search {
   border-radius: 12px;
   background: #f8faf8;
 }
+.campus-form-page {
+  max-width: 760px;
+}
 .campus-form label,
 .campus-form .two-col,
 .campus-form-title,
