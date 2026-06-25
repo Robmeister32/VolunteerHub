@@ -26,6 +26,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
 export async function login(email: string, password: string) {
   await signInWithEmailAndPassword(auth, email, password);
+  await api("/auth/login", { method: "POST", body: JSON.stringify({}) });
   return api<Record<string, unknown>>("/me").then(toSession);
 }
 
@@ -47,8 +48,15 @@ function toSession(me: Record<string, unknown>): Session {
     id: String(me.id),
     name: String(me.display_name || me.email || "Volunteer"),
     homeCampus: String(me.home_campus_name || "Campus not assigned"),
+    homeCampusIds: (me.home_campus_ids as string[]) ?? [],
     roles,
-    role: roles.includes("ADMIN") ? "ADMIN" : roles.includes("EVENT_LEADER") ? "EVENT_LEADER" : "VOLUNTEER",
+    role: roles.includes("ADMIN")
+      ? "ADMIN"
+      : roles.includes("EVENT_LEADER")
+        ? "EVENT_LEADER"
+        : roles.includes("TEAM_LEADER")
+          ? "TEAM_LEADER"
+          : "VOLUNTEER",
     volunteerId: me.volunteer_id ? String(me.volunteer_id) : undefined,
     ministryIds: (me.ministry_ids as string[]) ?? []
   };
@@ -71,12 +79,13 @@ export async function downloadExport(type: "volunteers" | "events" | "assignment
   URL.revokeObjectURL(url);
 }
 
-export type UserRole = "ADMIN" | "EVENT_LEADER" | "VOLUNTEER";
+export type UserRole = "ADMIN" | "EVENT_LEADER" | "TEAM_LEADER" | "VOLUNTEER";
 
 export interface Session {
   id: string;
   name: string;
   homeCampus: string;
+  homeCampusIds: string[];
   roles: UserRole[];
   role: UserRole;
   volunteerId?: string;
@@ -85,6 +94,10 @@ export interface Session {
 export interface EventItem {
   id: string;
   campus_id: string;
+  location_type?: "CAMPUS" | "OFF_SITE";
+  participating_campus_ids?: string[];
+  participating_campus_names?: string[];
+  matches_home_campus?: boolean;
   name: string;
   description: string;
   starts_at: string;

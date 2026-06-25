@@ -218,11 +218,50 @@ interface EmailTemplateVariable {
   example: string;
 }
 
+interface EventTemplateTeam {
+  name: string;
+  description: string;
+  instructions: string;
+  leaderUserIds: string[];
+  requiredVolunteerCount: number;
+  signupPolicy: "AUTO" | "APPROVAL";
+  movementPolicy: "AUTO" | "APPROVAL";
+  selfCheckinEnabled: boolean;
+}
+
+interface EventTemplate {
+  id: string;
+  name: string;
+  description: string;
+  event_leader_user_ids: string[];
+  teams: EventTemplateTeam[];
+  created_by: string;
+  creator_name: string;
+  is_active: boolean;
+  can_edit: boolean;
+  updated_at: string;
+}
+
 interface EventLeader {
   id: string;
   display_name?: string;
   email: string;
   roles: string[];
+}
+
+interface AuditLogItem {
+  id: number;
+  actor_user_id?: string;
+  actor_name: string;
+  actor_email?: string;
+  action: string;
+  module: string;
+  entity_type: string;
+  entity_id?: string;
+  entity_name?: string;
+  details: Record<string, unknown>;
+  ip_address?: string;
+  occurred_at: string;
 }
 
 interface CampusCatalogItem {
@@ -263,7 +302,12 @@ interface ArchivedEvent {
   event_leaders: string[];
 }
 
-const roleLabels = { ADMIN: "Church administrator", EVENT_LEADER: "Event leader", VOLUNTEER: "Volunteer" };
+const roleLabels = {
+  ADMIN: "Church administrator",
+  EVENT_LEADER: "Event leader",
+  TEAM_LEADER: "Event team leader",
+  VOLUNTEER: "Volunteer"
+};
 const eventStatuses: Array<{ value: EventStatus; label: string }> = [
   { value: "ACTIVE", label: "Active" },
   { value: "COMPLETE", label: "Complete" },
@@ -282,6 +326,18 @@ function hasRole(session: Session, role: UserRole) {
   return session.roles.includes(role);
 }
 
+function canManageEmailTemplates(session: Session) {
+  return hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER");
+}
+
+function canCreateBroadcasts(session: Session) {
+  return canManageEmailTemplates(session) || hasRole(session, "TEAM_LEADER");
+}
+
+function canCreateOneOffEvents(session: Session) {
+  return hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER");
+}
+
 function formatRoleName(role: string) {
   if (role === "ADMIN") return "Administrator";
   return role
@@ -289,6 +345,23 @@ function formatRoleName(role: string) {
     .split("_")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+function formatAuditAction(action: string) {
+  return action
+    .toLowerCase()
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function auditDetailsSummary(details: Record<string, unknown>) {
+  const entries = Object.entries(details ?? {}).filter(([, value]) => value !== null && value !== undefined);
+  if (!entries.length) return "No extra details";
+  return entries
+    .slice(0, 3)
+    .map(([key, value]) => `${formatRoleName(key)}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)
+    .join(" · ");
 }
 
 export function App() {
@@ -369,12 +442,16 @@ export function App() {
   if (!session) return <Login onLogin={enter} notice={notice} />;
 
   const nav =
-    session.role === "VOLUNTEER"
+    hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER")
       ? ([
           ["serve", Home, "Home"],
           ["commitments", ClipboardCheck, "My Commitments"],
           ["tasks", ClipboardList, "My Tasks"],
           ["messages", MessageSquareText, "My Messages"],
+          ["events", CalendarDays, "Events"],
+          ...(hasRole(session, "ADMIN") ? ([["applications", UserCheck, "Applications"]] as const) : []),
+          ["tools", Wrench, "Tools"],
+          ...(hasRole(session, "ADMIN") ? ([["administration", Settings, "Administration"]] as const) : []),
           ["profile", Users, "Profile"]
         ] as const)
       : ([
@@ -382,11 +459,8 @@ export function App() {
           ["commitments", ClipboardCheck, "My Commitments"],
           ["tasks", ClipboardList, "My Tasks"],
           ["messages", MessageSquareText, "My Messages"],
-          ["events", CalendarDays, "Events"],
-          ...(hasRole(session, "ADMIN") ? ([["applications", UserCheck, "Applications"]] as const) : []),
-          ["reports", ClipboardCheck, "Reports"],
           ["tools", Wrench, "Tools"],
-          ...(hasRole(session, "ADMIN") ? ([["administration", Settings, "Administration"]] as const) : [])
+          ["profile", Users, "Profile"]
         ] as const);
 
   const signOutUser = () => {
@@ -469,9 +543,7 @@ export function App() {
           {view === "events" && <Events session={session} notify={setNotice} />}
           {view === "applications" && <Applications notify={setNotice} />}
           {view === "reports" && <Reports />}
-          {view === "tools" && (hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER")) && (
-            <Tools session={session} notify={setNotice} />
-          )}
+          {view === "tools" && <Tools session={session} notify={setNotice} />}
           {view === "administration" && hasRole(session, "ADMIN") && (
             <Administration key={administrationKey} session={session} navigate={setView} notify={setNotice} />
           )}
@@ -704,6 +776,7 @@ function VolunteerHome({
   notify: (message: string) => void;
 }) {
   const [selected, setSelected] = useState<EventItem | null>(null);
+  const homeCampusEvents = events.filter((event) => eventMatchesHomeCampus(event, session));
   const assigned = events.find((event) => event.my_assignments?.some((a) => a.status === "CONFIRMED"));
   const assignedGroupId = assigned?.my_assignments?.find(
     (assignment) => assignment.status === "CONFIRMED"
@@ -788,7 +861,7 @@ function VolunteerHome({
         </button>
       </div>
       <div className="opportunity-grid">
-        {events.slice(0, 3).map((event) => (
+        {homeCampusEvents.slice(0, 3).map((event) => (
           <Opportunity key={event.id} event={event} onOpen={() => setSelected(event)} />
         ))}
       </div>
@@ -820,6 +893,7 @@ function Events({
 }) {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [eventSearch, setEventSearch] = useState("");
+  const [locationScope, setLocationScope] = useState<"MY_CAMPUS" | "ALL">("MY_CAMPUS");
   const [searchingEvents, setSearchingEvents] = useState(false);
   const [selected, setSelected] = useState<EventItem | null>(null);
   const [editSelected, setEditSelected] = useState(false);
@@ -859,7 +933,12 @@ function Events({
     });
     return () => controller.abort();
   }, [load, notify]);
-  const groupedServeEvents = events.reduce<Array<{ key: string; label: string; items: EventItem[] }>>(
+  const visibleEvents = events.filter(
+    (event) => locationScope === "ALL" || eventMatchesHomeCampus(event, session)
+  );
+  const groupedEvents = [...visibleEvents]
+    .sort((first, second) => new Date(first.starts_at).getTime() - new Date(second.starts_at).getTime())
+    .reduce<Array<{ key: string; label: string; items: EventItem[] }>>(
     (groups, event) => {
       const date = new Date(event.starts_at);
       const key = `${date.getFullYear()}-${date.getMonth()}`;
@@ -869,7 +948,7 @@ function Events({
       return groups;
     },
     []
-  );
+    );
   const signup = async (event: EventItem, eventGroupId: string, volunteerId?: string) => {
     try {
       const result = await api<{ status: string }>(`/event-groups/${eventGroupId}/signup`, {
@@ -949,6 +1028,22 @@ function Events({
           />
           {searchingEvents && <span className="searching-indicator">Searching…</span>}
         </div>
+        <div className="location-filter" aria-label="Event location filter">
+          <button
+            type="button"
+            className={locationScope === "MY_CAMPUS" ? "active" : ""}
+            onClick={() => setLocationScope("MY_CAMPUS")}
+          >
+            My Campus
+          </button>
+          <button
+            type="button"
+            className={locationScope === "ALL" ? "active" : ""}
+            onClick={() => setLocationScope("ALL")}
+          >
+            All Locations
+          </button>
+        </div>
         {!serveMode && hasRole(session, "ADMIN") && (
           <button className="primary" onClick={() => setCreating(true)}>
             + Create event
@@ -956,9 +1051,9 @@ function Events({
         )}
       </div>
       {serveMode ? (
-        groupedServeEvents.length ? (
+        groupedEvents.length ? (
           <div className="serve-event-months">
-            {groupedServeEvents.map((group) => (
+            {groupedEvents.map((group) => (
               <section className="serve-event-month" key={group.key}>
                 <div className="serve-month-heading">
                   <h2>{group.label}</h2>
@@ -990,25 +1085,47 @@ function Events({
           <Empty text={eventSearch ? "No upcoming events match your search." : "There are no upcoming events."} />
         )
       ) : (
-        <div className="events-grid">
-          {events.map((event) => (
-            <EventCard
-              key={event.id}
-              event={event}
-              session={session}
-              serveMode={false}
-              onOpen={() => {
-                setEditSelected(false);
-                setSelected(event);
-              }}
-              onEdit={() => {
-                setEditSelected(true);
-                setSelected(event);
-              }}
-              onManage={() => setManaging(event)}
-            />
-          ))}
-        </div>
+        groupedEvents.length ? (
+          <div className="serve-event-months">
+            {groupedEvents.map((group) => (
+              <section className="serve-event-month" key={group.key}>
+                <div className="serve-month-heading">
+                  <h2>{group.label}</h2>
+                  <span aria-hidden="true" />
+                </div>
+                <div className="events-grid">
+                  {group.items.map((event) => (
+                    <EventCard
+                      key={event.id}
+                      event={event}
+                      session={session}
+                      serveMode={false}
+                      onOpen={() => {
+                        setEditSelected(false);
+                        setSelected(event);
+                      }}
+                      onEdit={() => {
+                        setEditSelected(true);
+                        setSelected(event);
+                      }}
+                      onManage={() => setManaging(event)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        ) : (
+          <Empty
+            text={
+              eventSearch
+                ? "No upcoming events match your search."
+                : locationScope === "MY_CAMPUS"
+                  ? "There are no upcoming events for your campus or off-site locations."
+                  : "There are no upcoming events."
+            }
+          />
+        )
       )}
       {selected && (
         <EventDrawer
@@ -1539,8 +1656,8 @@ function CreateEvent({
             </select>
           </label>
           <div className="two-col">
-            <Field name="startsAt" label="Starts" type="datetime-local" />
-            <Field name="endsAt" label="Ends" type="datetime-local" />
+            <DateTimeField name="startsAt" label="Starts" />
+            <DateTimeField name="endsAt" label="Ends" />
           </div>
           <label>
             Address
@@ -1881,16 +1998,16 @@ function EventTeamEditor({
           <div className="two-col">
             <label>
               Signup policy
-              <select name="signupPolicy" defaultValue={team?.signup_policy ?? "APPROVAL"}>
-                <option value="APPROVAL">Leader approval</option>
+              <select name="signupPolicy" defaultValue={team?.signup_policy ?? "AUTO"}>
                 <option value="AUTO">Automatic confirmation</option>
+                <option value="APPROVAL">Leader approval</option>
               </select>
             </label>
             <label>
               Move/swap policy
-              <select name="movementPolicy" defaultValue={team?.movement_policy ?? "APPROVAL"}>
-                <option value="APPROVAL">Leader approval</option>
+              <select name="movementPolicy" defaultValue={team?.movement_policy ?? "AUTO"}>
                 <option value="AUTO">Automatic confirmation</option>
+                <option value="APPROVAL">Leader approval</option>
               </select>
             </label>
           </div>
@@ -2027,6 +2144,10 @@ function EventDrawer({
           latitude: Number(data.latitude),
           longitude: Number(data.longitude),
           eventLeaderUserIds: formData.getAll("eventLeaderUserIds"),
+          locationType: event.location_type ?? "CAMPUS",
+          participatingCampusIds: event.participating_campus_ids?.length
+            ? event.participating_campus_ids
+            : [String(data.campusId)],
           status: data.status
         })
       });
@@ -2087,13 +2208,8 @@ function EventDrawer({
               </select>
             </label>
             <div className="two-col">
-              <Field
-                name="startsAt"
-                label="Starts"
-                type="datetime-local"
-                defaultValue={toDateTimeLocal(event.starts_at)}
-              />
-              <Field name="endsAt" label="Ends" type="datetime-local" defaultValue={toDateTimeLocal(event.ends_at)} />
+              <DateTimeField name="startsAt" label="Starts" defaultValue={toDateTimeLocal(event.starts_at)} />
+              <DateTimeField name="endsAt" label="Ends" defaultValue={toDateTimeLocal(event.ends_at)} />
             </div>
             <label>
               Address
@@ -2204,17 +2320,17 @@ function EventDrawer({
                       <Field name="requiredVolunteerCount" label="Volunteers required" type="number" />
                       <label>
                         Signup policy
-                        <select name="signupPolicy">
-                          <option value="APPROVAL">Leader approval</option>
+                        <select name="signupPolicy" defaultValue="AUTO">
                           <option value="AUTO">Automatic confirmation</option>
+                          <option value="APPROVAL">Leader approval</option>
                         </select>
                       </label>
                     </div>
                     <label>
                       Move/swap policy
-                      <select name="movementPolicy">
-                        <option value="APPROVAL">Leader approval</option>
+                      <select name="movementPolicy" defaultValue="AUTO">
                         <option value="AUTO">Automatic confirmation</option>
+                        <option value="APPROVAL">Leader approval</option>
                       </select>
                     </label>
                     <label className="check-label">
@@ -2417,6 +2533,7 @@ function Broadcasts({ session, notify, close }: { session: Session; notify: (m: 
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
   const [intendedRecipients, setIntendedRecipients] = useState("BOTH");
+  const usesEventTargets = canManageEmailTemplates(session);
   const load = () => api<Array<Record<string, unknown>>>("/broadcasts").then(setItems);
   useEffect(() => {
     void load();
@@ -2425,9 +2542,9 @@ function Broadcasts({ session, notify, close }: { session: Session; notify: (m: 
         setEvents(
           eventRows.filter(
             (event) =>
-              hasRole(session, "ADMIN") ||
-              event.event_leader_user_ids.includes(session.id) ||
-              event.groups.some((group) => group.leader_user_ids.includes(session.id))
+              usesEventTargets
+                ? hasRole(session, "ADMIN") || event.event_leader_user_ids.includes(session.id)
+                : event.groups.some((group) => group.leader_user_ids.includes(session.id))
           )
         );
         setTemplates(templateRows.filter((template) => template.is_active));
@@ -2435,6 +2552,12 @@ function Broadcasts({ session, notify, close }: { session: Session; notify: (m: 
       .catch((error) => notify((error as Error).message));
   }, []);
   const selectedEvent = events.find((event) => event.id === eventId);
+  const teamTargets = events.flatMap((event) =>
+    event.groups
+      .filter((group) => group.leader_user_ids.includes(session.id))
+      .map((group) => ({ event, group, value: `${event.id}:${group.id}` }))
+  );
+  const selectedTeamTarget = eventId && eventGroupIds.length === 1 ? `${eventId}:${eventGroupIds[0]}` : "";
   const chooseTemplate = (id: string) => {
     setEmailTemplateId(id);
     const template = templates.find((item) => item.id === id);
@@ -2481,64 +2604,94 @@ function Broadcasts({ session, notify, close }: { session: Session; notify: (m: 
       <div className="content-grid">
         <Card title="Create broadcast">
           <form onSubmit={send}>
-            <label>
-              Event
-              <select
-                value={eventId}
-                onChange={(event) => {
-                  setEventId(event.target.value);
-                  setEventGroupIds([]);
-                }}
-                required
-              >
-                <option value="">Select an event</option>
-                {events.map((event) => (
-                  <option key={event.id} value={event.id}>
-                    {event.name} · {formatDate(event.starts_at)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <fieldset className="broadcast-team-picker" disabled={!selectedEvent}>
-              <legend>
-                Event teams <small className="form-help">Optional · select one or more</small>
-              </legend>
-              <div className="broadcast-team-options">
-                <label
-                  className={eventGroupIds.length === 0 ? "broadcast-team-option selected" : "broadcast-team-option"}
-                >
-                  <input type="checkbox" checked={eventGroupIds.length === 0} onChange={() => setEventGroupIds([])} />
-                  <span>
-                    <strong>All event teams</strong>
-                    <small>Include every team in this event</small>
-                  </span>
+            {usesEventTargets ? (
+              <>
+                <label>
+                  Event
+                  <select
+                    value={eventId}
+                    onChange={(event) => {
+                      setEventId(event.target.value);
+                      setEventGroupIds([]);
+                    }}
+                    required
+                  >
+                    <option value="">Select an event</option>
+                    {events.map((event) => (
+                      <option key={event.id} value={event.id}>
+                        {event.name} · {formatDate(event.starts_at)}
+                      </option>
+                    ))}
+                  </select>
                 </label>
-                {selectedEvent?.groups.map((group) => {
-                  const checked = eventGroupIds.includes(group.id);
-                  return (
+                <fieldset className="broadcast-team-picker" disabled={!selectedEvent}>
+                  <legend>
+                    Event teams <small className="form-help">Optional · select one or more</small>
+                  </legend>
+                  <div className="broadcast-team-options">
                     <label
-                      key={group.id}
-                      className={checked ? "broadcast-team-option selected" : "broadcast-team-option"}
+                      className={
+                        eventGroupIds.length === 0 ? "broadcast-team-option selected" : "broadcast-team-option"
+                      }
                     >
                       <input
                         type="checkbox"
-                        checked={checked}
-                        onChange={() =>
-                          setEventGroupIds((selected) =>
-                            checked ? selected.filter((id) => id !== group.id) : [...selected, group.id]
-                          )
-                        }
+                        checked={eventGroupIds.length === 0}
+                        onChange={() => setEventGroupIds([])}
                       />
                       <span>
-                        <strong>{group.name}</strong>
-                        <small>{group.confirmed_count} enlisted</small>
+                        <strong>All event teams</strong>
+                        <small>Include every team in this event</small>
                       </span>
                     </label>
-                  );
-                })}
-                {!selectedEvent && <p className="form-help">Select an event to view its teams.</p>}
-              </div>
-            </fieldset>
+                    {selectedEvent?.groups.map((group) => {
+                      const checked = eventGroupIds.includes(group.id);
+                      return (
+                        <label
+                          key={group.id}
+                          className={checked ? "broadcast-team-option selected" : "broadcast-team-option"}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() =>
+                              setEventGroupIds((selected) =>
+                                checked ? selected.filter((id) => id !== group.id) : [...selected, group.id]
+                              )
+                            }
+                          />
+                          <span>
+                            <strong>{group.name}</strong>
+                            <small>{group.confirmed_count} enlisted</small>
+                          </span>
+                        </label>
+                      );
+                    })}
+                    {!selectedEvent && <p className="form-help">Select an event to view its teams.</p>}
+                  </div>
+                </fieldset>
+              </>
+            ) : (
+              <label>
+                Event team
+                <select
+                  value={selectedTeamTarget}
+                  onChange={(event) => {
+                    const [nextEventId, nextGroupId] = event.target.value.split(":");
+                    setEventId(nextEventId || "");
+                    setEventGroupIds(nextGroupId ? [nextGroupId] : []);
+                  }}
+                  required
+                >
+                  <option value="">Select an event team</option>
+                  {teamTargets.map(({ event, group, value }) => (
+                    <option key={value} value={value}>
+                      {event.name} · {group.name} · {formatDate(event.starts_at)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>
               Intended recipients
               <select value={intendedRecipients} onChange={(event) => setIntendedRecipients(event.target.value)}>
@@ -2672,23 +2825,51 @@ function Reports() {
 }
 
 function Tools({ session, notify }: { session: Session; notify: (message: string) => void }) {
-  const [section, setSection] = useState<"home" | "email-templates" | "broadcasts">("home");
+  const [section, setSection] = useState<
+    "home" | "email-templates" | "event-templates" | "create-event" | "create-events" | "broadcasts"
+  >("home");
   const [templateCount, setTemplateCount] = useState(0);
+  const [eventTemplateCount, setEventTemplateCount] = useState(0);
   const [broadcastCount, setBroadcastCount] = useState(0);
+  const canUseTemplates = canManageEmailTemplates(session);
+  const canUseBroadcasts = canCreateBroadcasts(session);
+  const canUseOneOffEvents = canCreateOneOffEvents(session);
 
   useEffect(() => {
-    Promise.all([api<EmailTemplate[]>("/tools/email-templates"), api<Array<Record<string, unknown>>>("/broadcasts")])
-      .then(([templates, broadcasts]) => {
-        setTemplateCount(templates.length);
-        setBroadcastCount(broadcasts.length);
-      })
-      .catch((error) => notify((error as Error).message));
-  }, []);
+    if (canUseTemplates) {
+      api<EmailTemplate[]>("/tools/email-templates")
+        .then((templates) => {
+          setTemplateCount(templates.length);
+        })
+        .catch((error) => notify((error as Error).message));
+      api<EventTemplate[]>("/tools/event-templates")
+        .then((templates) => {
+          setEventTemplateCount(templates.length);
+        })
+        .catch((error) => notify((error as Error).message));
+    }
+    if (canUseBroadcasts) {
+      api<Array<Record<string, unknown>>>("/broadcasts")
+        .then((broadcasts) => {
+          setBroadcastCount(broadcasts.length);
+        })
+        .catch((error) => notify((error as Error).message));
+    }
+  }, [canUseTemplates, canUseBroadcasts, notify]);
 
-  if (section === "email-templates") {
+  if (section === "email-templates" && canUseTemplates) {
     return <EmailTemplateManager notify={notify} close={() => setSection("home")} />;
   }
-  if (section === "broadcasts") {
+  if (section === "event-templates" && canUseTemplates) {
+    return <EventTemplateManager notify={notify} close={() => setSection("home")} />;
+  }
+  if (section === "create-event" && canUseOneOffEvents) {
+    return <OneOffEventCreator session={session} notify={notify} close={() => setSection("home")} />;
+  }
+  if (section === "create-events" && canUseTemplates) {
+    return <TemplateEventCreator notify={notify} close={() => setSection("home")} />;
+  }
+  if (section === "broadcasts" && canUseBroadcasts) {
     return <Broadcasts session={session} notify={notify} close={() => setSection("home")} />;
   }
 
@@ -2700,20 +2881,875 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
         description="Create reusable resources for communicating with volunteers and event teams."
       />
       <div className="maintenance-card-grid tools-card-grid">
-        <MaintenanceCard
-          icon={<Mail />}
-          title="Email Templates"
-          description="Build reusable email content with volunteer, event, team, campus, and leader variables."
-          count={templateCount}
-          onClick={() => setSection("email-templates")}
+        {canUseOneOffEvents && (
+          <MaintenanceCard
+            icon={<MapPin />}
+            title="Create Event"
+            description="Create single instance events."
+            onClick={() => setSection("create-event")}
+          />
+        )}
+        {canUseTemplates && (
+          <MaintenanceCard
+            icon={<Plus />}
+            title="Create Events Using Template"
+            description="Generate one or more draft event instances and their teams from an event template."
+            onClick={() => setSection("create-events")}
+          />
+        )}
+        {canUseBroadcasts && (
+          <MaintenanceCard
+            icon={<Megaphone />}
+            title="Broadcasts"
+            description="Send an event message using an optional email template and a targeted volunteer audience."
+            count={broadcastCount}
+            onClick={() => setSection("broadcasts")}
+          />
+        )}
+      </div>
+      {canUseTemplates && (
+        <>
+          <div className="tools-section-divider">
+            <span>Templates</span>
+          </div>
+          <div className="maintenance-card-grid tools-card-grid">
+            <MaintenanceCard
+              icon={<Mail />}
+              title="Email Templates"
+              description="Build reusable email content with volunteer, event, team, campus, and leader variables."
+              count={templateCount}
+              onClick={() => setSection("email-templates")}
+            />
+            <MaintenanceCard
+              icon={<CalendarDays />}
+              title="Event Templates"
+              description="Preconfigure event details and teams so future event schedules can be created in bulk."
+              count={eventTemplateCount}
+              onClick={() => setSection("event-templates")}
+            />
+          </div>
+        </>
+      )}
+      {!canUseOneOffEvents && !canUseTemplates && !canUseBroadcasts && (
+        <Empty text="No tools are available for your current role." />
+      )}
+    </>
+  );
+}
+
+function OneOffEventCreator({
+  session,
+  notify,
+  close
+}: {
+  session: Session;
+  notify: (message: string) => void;
+  close: () => void;
+}) {
+  const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[] }>({ campuses: [] });
+  const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
+  const [teamLeaders, setTeamLeaders] = useState<EventLeader[]>([]);
+  const [locationType, setLocationType] = useState<"CAMPUS" | "OFF_SITE">("CAMPUS");
+  const [campusId, setCampusId] = useState("");
+  const [location, setLocation] = useState({ address: "", latitude: "", longitude: "" });
+  const [teams, setTeams] = useState<Array<EventTemplateTeam & { localId: string }>>([]);
+  const [creating, setCreating] = useState(false);
+
+  const newTeam = (): EventTemplateTeam & { localId: string } => ({
+    localId:
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`,
+    name: "",
+    description: "",
+    instructions: "",
+    leaderUserIds: [],
+    requiredVolunteerCount: 0,
+    signupPolicy: "AUTO",
+    movementPolicy: "AUTO",
+    selfCheckinEnabled: false
+  });
+
+  const useCampusLocation = (campus: CampusCatalogItem) => {
+    setCampusId(campus.id);
+    setLocation({
+      address: campus.address ?? "",
+      latitude: campus.latitude === null || campus.latitude === undefined ? "" : String(campus.latitude),
+      longitude: campus.longitude === null || campus.longitude === undefined ? "" : String(campus.longitude)
+    });
+  };
+
+  useEffect(() => {
+    Promise.all([
+      api<{ campuses: CampusCatalogItem[] }>("/catalog"),
+      api<{ eventLeaders: EventLeader[]; teamLeaders: EventLeader[] }>("/tools/event-template-leaders")
+    ])
+      .then(([catalogRows, leaderRows]) => {
+        setCatalog(catalogRows);
+        setEventLeaders(leaderRows.eventLeaders);
+        setTeamLeaders(leaderRows.teamLeaders);
+        if (catalogRows.campuses[0]) useCampusLocation(catalogRows.campuses[0]);
+      })
+      .catch((error) => notify((error as Error).message));
+  }, []);
+
+  const selectedParticipantDefaults =
+    locationType === "CAMPUS" && campusId ? [campusId] : session.homeCampusIds.filter(Boolean);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const participatingCampusIds = formData.getAll("participatingCampusIds").map(String);
+    if (!participatingCampusIds.length) return notify("Select at least one participating campus.");
+    if (!location.latitude || !location.longitude) return notify("Latitude and longitude are required.");
+    const anchorCampusId = locationType === "CAMPUS" ? campusId : participatingCampusIds[0];
+    if (!anchorCampusId) return notify("Select a campus for this event.");
+    const startsAt = new Date(String(formData.get("startsAt")));
+    const endsAt = new Date(String(formData.get("endsAt")));
+    if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()))
+      return notify("Enter a valid start date and end date.");
+    if (endsAt <= startsAt) return notify("End date must be after start date.");
+    const teamPayload = teams.map((team, index) => ({
+      name: String(formData.get(`teamName-${index}`) ?? "").trim(),
+      description: String(formData.get(`teamDescription-${index}`) ?? "").trim(),
+      instructions: String(formData.get(`teamInstructions-${index}`) ?? "").trim(),
+      leaderUserIds: formData.getAll(`teamLeaderUserIds-${index}`).map(String),
+      requiredVolunteerCount: Number(formData.get(`teamRequiredVolunteerCount-${index}`) ?? 0),
+      signupPolicy: String(formData.get(`teamSignupPolicy-${index}`)) as EventTemplateTeam["signupPolicy"],
+      movementPolicy: String(formData.get(`teamMovementPolicy-${index}`)) as EventTemplateTeam["movementPolicy"],
+      selfCheckinEnabled: formData.get(`teamSelfCheckinEnabled-${index}`) === "on"
+    }));
+
+    setCreating(true);
+    try {
+      await api("/events", {
+        method: "POST",
+        body: JSON.stringify({
+          locationType,
+          campusId: anchorCampusId,
+          participatingCampusIds,
+          name: String(formData.get("name") ?? ""),
+          description: String(formData.get("description") ?? ""),
+          startsAt: startsAt.toISOString(),
+          endsAt: endsAt.toISOString(),
+          address: location.address,
+          latitude: Number(location.latitude),
+          longitude: Number(location.longitude),
+          eventLeaderUserIds: formData.getAll("eventLeaderUserIds").map(String),
+          teams: teamPayload
+        })
+      });
+      notify("Event created as Draft.");
+      close();
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <>
+      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Create event" }]} />
+      <PageTitle
+        eyebrow="Event"
+        title="Create Event"
+      />
+      <form className="card template-event-create-form" onSubmit={submit}>
+        <MaintenanceFormTitle
+          icon={<MapPin />}
+          title="Event details"
+          description="Choose a physical location, then select the campuses and teams expected to participate."
         />
-        <MaintenanceCard
-          icon={<Megaphone />}
-          title="Broadcasts"
-          description="Send an event message using an optional email template and a targeted volunteer audience."
-          count={broadcastCount}
-          onClick={() => setSection("broadcasts")}
+        <Field name="name" label="Event name" />
+        <label>
+          Description
+          <textarea name="description" rows={3} required />
+        </label>
+        <div className="location-filter event-location-mode" aria-label="Event location type">
+          <button
+            type="button"
+            className={locationType === "CAMPUS" ? "active" : ""}
+            onClick={() => {
+              setLocationType("CAMPUS");
+              const campus = catalog.campuses.find((item) => item.id === campusId) ?? catalog.campuses[0];
+              if (campus) useCampusLocation(campus);
+            }}
+          >
+            Campus
+          </button>
+          <button
+            type="button"
+            className={locationType === "OFF_SITE" ? "active" : ""}
+            onClick={() => {
+              setLocationType("OFF_SITE");
+              setLocation({ address: "", latitude: "", longitude: "" });
+            }}
+          >
+            Off-site
+          </button>
+        </div>
+        {locationType === "CAMPUS" && (
+          <label>
+            Event location
+            <select
+              value={campusId}
+              required
+              onChange={(event) => {
+                const campus = catalog.campuses.find((item) => item.id === event.target.value);
+                if (campus) useCampusLocation(campus);
+              }}
+            >
+              <option value="">Select a campus</option>
+              {catalog.campuses.map((campus) => (
+                <option key={campus.id} value={campus.id}>
+                  {campus.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label>
+          Address
+          <input
+            value={location.address}
+            required
+            onChange={(event) => setLocation((value) => ({ ...value, address: event.target.value }))}
+          />
+        </label>
+        <div className="two-col">
+          <LocationField
+            name="latitude"
+            label="Latitude"
+            value={location.latitude}
+            disabled={locationType === "CAMPUS"}
+            onChange={(value) => setLocation((current) => ({ ...current, latitude: value }))}
+          />
+          <LocationField
+            name="longitude"
+            label="Longitude"
+            value={location.longitude}
+            disabled={locationType === "CAMPUS"}
+            onChange={(value) => setLocation((current) => ({ ...current, longitude: value }))}
+          />
+        </div>
+        <CampusBubbleSelector
+          key={`${locationType}-${campusId || selectedParticipantDefaults.join("-")}`}
+          campuses={catalog.campuses}
+          selectedIds={selectedParticipantDefaults}
+          inputName="participatingCampusIds"
+          title="Participating Campus"
+          emptyLabel="Add participating campus"
+          addAnotherLabel="Add another campus"
+          helpText="Target volunteers from campuses close enough to participate in this one-off event."
         />
+        <div className="two-col">
+          <DateTimeField name="startsAt" label="Start date" />
+          <DateTimeField name="endsAt" label="End date" />
+        </div>
+        <LeaderSelector leaders={eventLeaders} selectedIds={[session.id]} title="Event leader" />
+        <section className="event-template-teams">
+          <div className="card-header">
+            <div>
+              <span className="eyebrow">Event teams</span>
+              <h3>{teams.length} configured</h3>
+            </div>
+          </div>
+          <div className="event-template-team-list">
+            {teams.map((team, index) => (
+              <article className="event-template-team-card" key={team.localId}>
+                <div className="card-header">
+                  <div>
+                    <span className="eyebrow">Team {index + 1}</span>
+                    <h3>{team.name || "New event team"}</h3>
+                  </div>
+                  <button
+                    className="secondary danger"
+                    type="button"
+                    onClick={() => setTeams((current) => current.filter((item) => item.localId !== team.localId))}
+                  >
+                    <X size={16} /> Remove
+                  </button>
+                </div>
+                <Field name={`teamName-${index}`} label="Team name" defaultValue={team.name} />
+                <label>
+                  Description
+                  <textarea name={`teamDescription-${index}`} rows={2} defaultValue={team.description} required />
+                </label>
+                <label>
+                  Instructions
+                  <textarea name={`teamInstructions-${index}`} rows={2} defaultValue={team.instructions} />
+                </label>
+                <div className="two-col">
+                  <Field
+                    name={`teamRequiredVolunteerCount-${index}`}
+                    label="Volunteers required"
+                    type="number"
+                    defaultValue={team.requiredVolunteerCount}
+                  />
+                  <label>
+                    Signup policy
+                    <select name={`teamSignupPolicy-${index}`} defaultValue={team.signupPolicy}>
+                      <option value="AUTO">Automatic confirmation</option>
+                      <option value="APPROVAL">Leader approval</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="two-col">
+                  <label>
+                    Move/swap policy
+                    <select name={`teamMovementPolicy-${index}`} defaultValue={team.movementPolicy}>
+                      <option value="AUTO">Automatic confirmation</option>
+                      <option value="APPROVAL">Leader approval</option>
+                    </select>
+                  </label>
+                  <span />
+                </div>
+                <LeaderSelector
+                  key={`one-off-team-leaders-${team.localId}`}
+                  leaders={teamLeaders}
+                  selectedIds={team.leaderUserIds}
+                  inputName={`teamLeaderUserIds-${index}`}
+                  title="Team leaders"
+                  searchPlaceholder="Search Administrators, Event Leaders, or Team Leaders"
+                  emptyMessage="No active team leaders are available."
+                />
+                <label className="check-label">
+                  <input
+                    name={`teamSelfCheckinEnabled-${index}`}
+                    type="checkbox"
+                    defaultChecked={team.selfCheckinEnabled}
+                  />
+                  Enable location-bound self check-in
+                </label>
+              </article>
+            ))}
+            {!teams.length && <Empty text="No event teams have been added to this event." />}
+          </div>
+          <button className="secondary full" type="button" onClick={() => setTeams((current) => [...current, newTeam()])}>
+            <Plus size={16} /> Add event team
+          </button>
+        </section>
+        <div className="card-actions">
+          <button className="secondary" type="button" onClick={close}>
+            Cancel
+          </button>
+          <button className="primary" disabled={creating}>
+            {creating ? "Creating..." : "Create"}
+          </button>
+        </div>
+      </form>
+    </>
+  );
+}
+
+const scheduleIntervals = [
+  { value: "DAILY", label: "Daily" },
+  { value: "WEEKLY", label: "Weekly" },
+  { value: "EVERY_2_WEEKS", label: "Every 2 weeks" },
+  { value: "EVERY_3_WEEKS", label: "Every 3 weeks" },
+  { value: "EVERY_4_WEEKS", label: "Every 4 weeks" },
+  { value: "EVERY_5_WEEKS", label: "Every 5 weeks" },
+  { value: "EVERY_6_WEEKS", label: "Every 6 weeks" },
+  { value: "EVERY_7_WEEKS", label: "Every 7 weeks" },
+  { value: "EVERY_8_WEEKS", label: "Every 8 weeks" }
+] as const;
+
+function TemplateEventCreator({ notify, close }: { notify: (message: string) => void; close: () => void }) {
+  const [templates, setTemplates] = useState<EventTemplate[]>([]);
+  const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[] }>({ campuses: [] });
+  const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
+  const [templateId, setTemplateId] = useState("");
+  const [campusId, setCampusId] = useState("");
+  const [location, setLocation] = useState({ address: "", latitude: "", longitude: "" });
+  const [creating, setCreating] = useState(false);
+  const selectedTemplate = templates.find((template) => template.id === templateId);
+
+  useEffect(() => {
+    Promise.all([
+      api<EventTemplate[]>("/tools/event-templates"),
+      api<{ campuses: CampusCatalogItem[] }>("/catalog"),
+      api<{ eventLeaders: EventLeader[]; teamLeaders: EventLeader[] }>("/tools/event-template-leaders")
+    ])
+      .then(([templateRows, catalogRows, leaderRows]) => {
+        setTemplates(templateRows.filter((template) => template.is_active));
+        setCatalog(catalogRows);
+        setEventLeaders(leaderRows.eventLeaders);
+        if (catalogRows.campuses[0]) useCampusLocation(catalogRows.campuses[0]);
+      })
+      .catch((error) => notify((error as Error).message));
+  }, []);
+
+  const useCampusLocation = (campus: CampusCatalogItem) => {
+    setCampusId(campus.id);
+    setLocation({
+      address: campus.address ?? "",
+      latitude: campus.latitude === null || campus.latitude === undefined ? "" : String(campus.latitude),
+      longitude: campus.longitude === null || campus.longitude === undefined ? "" : String(campus.longitude)
+    });
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!templateId) return notify("Select an event template.");
+    if (!location.latitude || !location.longitude) return notify("Selected campus does not have derived coordinates.");
+    const formData = new FormData(event.currentTarget);
+    setCreating(true);
+    try {
+      const result = await api<{ createdCount: number }>(`/tools/event-templates/${templateId}/create-events`, {
+        method: "POST",
+        body: JSON.stringify({
+          eventName: String(formData.get("eventName") ?? ""),
+          description: String(formData.get("description") ?? ""),
+          campusId,
+          address: location.address,
+          latitude: Number(location.latitude),
+          longitude: Number(location.longitude),
+          startsAt: new Date(String(formData.get("startsAt"))).toISOString(),
+          endsAt: new Date(String(formData.get("endsAt"))).toISOString(),
+          occurrence: Number(formData.get("occurrence") ?? 1),
+          interval: String(formData.get("interval") ?? "WEEKLY"),
+          eventLeaderUserIds: formData.getAll("eventLeaderUserIds").map(String)
+        })
+      });
+      notify(`${result.createdCount} event${result.createdCount === 1 ? "" : "s"} created as draft.`);
+      close();
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <>
+      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Create events using template" }]} />
+      <PageTitle
+        eyebrow="Scheduling"
+        title="Create Events Using Template"
+        description="Generate draft event instances and template teams across a recurring schedule."
+      />
+      <form key={templateId || "template-event-create"} className="card template-event-create-form" onSubmit={submit}>
+        <MaintenanceFormTitle
+          icon={<Plus />}
+          title="Schedule from template"
+          description="Each occurrence creates a draft event and copies the template's event teams."
+        />
+        <label>
+          Event template
+          <select value={templateId} onChange={(event) => setTemplateId(event.target.value)} required>
+            <option value="">Select a template</option>
+            {templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name} · {template.teams.length} team{template.teams.length === 1 ? "" : "s"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Field name="eventName" label="Event name" defaultValue={selectedTemplate?.name ?? ""} />
+        <label>
+          Description
+          <textarea name="description" rows={3} defaultValue={selectedTemplate?.description ?? ""} required />
+        </label>
+        <div className="two-col">
+          <label>
+            Campus
+            <select
+              value={campusId}
+              required
+              onChange={(event) => {
+                const campus = catalog.campuses.find((item) => item.id === event.target.value);
+                if (campus) useCampusLocation(campus);
+              }}
+            >
+              <option value="">Select a campus</option>
+              {catalog.campuses.map((campus) => (
+                <option key={campus.id} value={campus.id}>
+                  {campus.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Address
+            <input
+              value={location.address}
+              required
+              onChange={(event) => setLocation((value) => ({ ...value, address: event.target.value }))}
+            />
+          </label>
+        </div>
+        <div className="two-col">
+          <LocationField
+            name="latitude"
+            label="Latitude"
+            value={location.latitude}
+            disabled
+            onChange={(value) => setLocation((current) => ({ ...current, latitude: value }))}
+          />
+          <LocationField
+            name="longitude"
+            label="Longitude"
+            value={location.longitude}
+            disabled
+            onChange={(value) => setLocation((current) => ({ ...current, longitude: value }))}
+          />
+        </div>
+        <div className="two-col">
+          <DateTimeField name="startsAt" label="Start date" />
+          <DateTimeField name="endsAt" label="End date" />
+        </div>
+        <div className="two-col">
+          <label>
+            Occurrence
+            <input name="occurrence" type="number" min={1} max={24} defaultValue={1} required />
+          </label>
+          <label>
+            Interval
+            <select name="interval" defaultValue="WEEKLY">
+              {scheduleIntervals.map((interval) => (
+                <option key={interval.value} value={interval.value}>
+                  {interval.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <LeaderSelector
+          key={`template-event-leaders-${templateId || "none"}`}
+          leaders={eventLeaders}
+          selectedIds={selectedTemplate?.event_leader_user_ids ?? []}
+          title="Event leader"
+        />
+        <div className="card-actions">
+          <button className="secondary" type="button" onClick={close}>
+            Cancel
+          </button>
+          <button className="primary" disabled={creating}>
+            {creating ? "Creating..." : "Create"}
+          </button>
+        </div>
+      </form>
+    </>
+  );
+}
+
+type EventTemplateForm = {
+  name: string;
+  description: string;
+  isActive: boolean;
+};
+
+const blankEventTemplateForm: EventTemplateForm = {
+  name: "",
+  description: "",
+  isActive: true
+};
+
+const blankEventTemplateTeam: EventTemplateTeam = {
+  name: "",
+  description: "",
+  instructions: "",
+  leaderUserIds: [],
+  requiredVolunteerCount: 0,
+  signupPolicy: "AUTO",
+  movementPolicy: "AUTO",
+  selfCheckinEnabled: false
+};
+
+function EventTemplateManager({ notify, close }: { notify: (message: string) => void; close: () => void }) {
+  const [templates, setTemplates] = useState<EventTemplate[]>([]);
+  const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
+  const [teamLeaders, setTeamLeaders] = useState<EventLeader[]>([]);
+  const [selected, setSelected] = useState<EventTemplate | null>(null);
+  const [form, setForm] = useState<EventTemplateForm>(blankEventTemplateForm);
+  const [teams, setTeams] = useState<EventTemplateTeam[]>([]);
+  const [saving, setSaving] = useState(false);
+  const loadTemplates = useCallback(
+    () =>
+      api<EventTemplate[]>("/tools/event-templates")
+        .then(setTemplates)
+        .catch((error) => notify((error as Error).message)),
+    []
+  );
+
+  useEffect(() => {
+    void loadTemplates();
+    api<{ eventLeaders: EventLeader[]; teamLeaders: EventLeader[] }>("/tools/event-template-leaders")
+      .then((leaderRows) => {
+        setEventLeaders(leaderRows.eventLeaders);
+        setTeamLeaders(leaderRows.teamLeaders);
+      })
+      .catch((error) => notify((error as Error).message));
+  }, []);
+
+  const startNew = () => {
+    setSelected(null);
+    setForm({ ...blankEventTemplateForm });
+    setTeams([]);
+  };
+
+  const chooseTemplate = (template: EventTemplate) => {
+    setSelected(template);
+    setForm({
+      name: template.name,
+      description: template.description ?? "",
+      isActive: template.is_active
+    });
+    setTeams(template.teams);
+  };
+
+  const updateTeam = (index: number, patch: Partial<EventTemplateTeam>) => {
+    setTeams((current) => current.map((team, teamIndex) => (teamIndex === index ? { ...team, ...patch } : team)));
+  };
+
+  const save = async (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    if (selected && !selected.can_edit) return;
+    const formData = new FormData(formEvent.currentTarget);
+    const teamPayload = teams.map((team, index) => ({
+      name: String(formData.get(`teamName-${index}`) ?? "").trim(),
+      description: String(formData.get(`teamDescription-${index}`) ?? "").trim(),
+      instructions: String(formData.get(`teamInstructions-${index}`) ?? "").trim(),
+      leaderUserIds: formData.getAll(`teamLeaderUserIds-${index}`).map(String),
+      requiredVolunteerCount: Number(formData.get(`teamRequiredVolunteerCount-${index}`) ?? 0),
+      signupPolicy: String(formData.get(`teamSignupPolicy-${index}`)) as EventTemplateTeam["signupPolicy"],
+      movementPolicy: String(formData.get(`teamMovementPolicy-${index}`)) as EventTemplateTeam["movementPolicy"],
+      selfCheckinEnabled: formData.get(`teamSelfCheckinEnabled-${index}`) === "on"
+    }));
+    setSaving(true);
+    try {
+      await api(selected ? `/tools/event-templates/${selected.id}` : "/tools/event-templates", {
+        method: selected ? "PATCH" : "POST",
+        body: JSON.stringify({
+          name: form.name,
+          description: form.description,
+          eventLeaderUserIds: formData.getAll("eventLeaderUserIds").map(String),
+          teams: teamPayload,
+          isActive: form.isActive
+        })
+      });
+      await loadTemplates();
+      startNew();
+      notify(selected ? "Event template updated." : "Event template created.");
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const readOnly = Boolean(selected && !selected.can_edit);
+
+  return (
+    <>
+      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Event templates" }]} />
+      <PageTitle
+        eyebrow="Planning tools"
+        title="Event Templates"
+        description="Preconfigure event details and teams for future bulk scheduling."
+      />
+      <div className="email-template-layout event-template-layout">
+        <aside className="card email-template-list">
+          <div className="card-header">
+            <div>
+              <span className="eyebrow">Template library</span>
+              <h3>{templates.length} event templates</h3>
+            </div>
+            <button className="secondary" type="button" onClick={startNew}>
+              <Plus size={16} /> New
+            </button>
+          </div>
+          <div className="email-template-list-items">
+            {templates.map((template) => (
+              <button
+                key={template.id}
+                className={
+                  selected?.id === template.id ? "email-template-list-item active" : "email-template-list-item"
+                }
+                onClick={() => chooseTemplate(template)}
+              >
+                <span className="email-template-list-icon">
+                  <CalendarDays size={17} />
+                </span>
+                <span className="grow">
+                  <strong>{template.name}</strong>
+                  <small>
+                    {template.teams.length} team{template.teams.length === 1 ? "" : "s"}
+                  </small>
+                </span>
+                {!template.is_active && <span className="status neutral">Inactive</span>}
+                <ChevronRight size={17} />
+              </button>
+            ))}
+            {!templates.length && <p className="empty-state">No event templates yet. Create the first one.</p>}
+          </div>
+        </aside>
+
+        <form
+          key={selected?.id ?? "new-event-template"}
+          className="card email-template-editor event-template-editor"
+          onSubmit={save}
+        >
+          <MaintenanceFormTitle
+            icon={<CalendarDays />}
+            title={selected ? selected.name : "Create event template"}
+            description={
+              readOnly
+                ? `Shared by ${selected?.creator_name}`
+                : "Define reusable event details and the teams that should be created with it."
+            }
+          />
+          {readOnly && (
+            <div className="template-readonly-note">
+              This shared event template is read-only. Create a new template to customize it.
+            </div>
+          )}
+          <label>
+            Template name
+            <input
+              value={form.name}
+              onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))}
+              disabled={readOnly}
+              required
+            />
+          </label>
+          <label>
+            Description
+            <textarea
+              value={form.description}
+              onChange={(event) => setForm((value) => ({ ...value, description: event.target.value }))}
+              disabled={readOnly}
+              rows={3}
+            />
+          </label>
+          <LeaderSelector
+            key={`event-leaders-${selected?.id ?? "new"}`}
+            leaders={eventLeaders}
+            selectedIds={selected?.event_leader_user_ids ?? []}
+          />
+
+          <section className="event-template-teams">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">Event teams</span>
+                <h3>{teams.length} configured</h3>
+              </div>
+            </div>
+            <div className="event-template-team-list">
+              {teams.map((team, index) => (
+                <article className="event-template-team-card" key={`${selected?.id ?? "new"}-${index}`}>
+                  <div className="card-header">
+                    <div>
+                      <span className="eyebrow">Team {index + 1}</span>
+                      <h3>{team.name || "New event team"}</h3>
+                    </div>
+                    {!readOnly && teams.length > 1 && (
+                      <button
+                        className="secondary danger"
+                        type="button"
+                        onClick={() => setTeams((current) => current.filter((_, teamIndex) => teamIndex !== index))}
+                      >
+                        <X size={16} /> Remove
+                      </button>
+                    )}
+                  </div>
+                  <Field name={`teamName-${index}`} label="Team name" defaultValue={team.name} />
+                  <label>
+                    Description
+                    <textarea name={`teamDescription-${index}`} rows={2} defaultValue={team.description} />
+                  </label>
+                  <label>
+                    Instructions
+                    <textarea name={`teamInstructions-${index}`} rows={2} defaultValue={team.instructions} />
+                  </label>
+                  <div className="two-col">
+                    <Field
+                      name={`teamRequiredVolunteerCount-${index}`}
+                      label="Volunteers required"
+                      type="number"
+                      defaultValue={team.requiredVolunteerCount}
+                    />
+                    <label>
+                      Signup policy
+                      <select
+                        name={`teamSignupPolicy-${index}`}
+                        defaultValue={team.signupPolicy}
+                        onChange={(event) =>
+                          updateTeam(index, { signupPolicy: event.target.value as EventTemplateTeam["signupPolicy"] })
+                        }
+                      >
+                        <option value="AUTO">Automatic confirmation</option>
+                        <option value="APPROVAL">Leader approval</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label>
+                    Move/swap policy
+                    <select
+                      name={`teamMovementPolicy-${index}`}
+                      defaultValue={team.movementPolicy}
+                      onChange={(event) =>
+                        updateTeam(index, { movementPolicy: event.target.value as EventTemplateTeam["movementPolicy"] })
+                      }
+                    >
+                      <option value="AUTO">Automatic confirmation</option>
+                      <option value="APPROVAL">Leader approval</option>
+                    </select>
+                  </label>
+                  <LeaderSelector
+                    key={`team-leaders-${selected?.id ?? "new"}-${index}`}
+                    leaders={teamLeaders}
+                    selectedIds={team.leaderUserIds}
+                    inputName={`teamLeaderUserIds-${index}`}
+                    title="Team leaders"
+                    searchPlaceholder="Search Administrators, Event Leaders, or Team Leaders"
+                    emptyMessage="No active Administrators, Event Leaders, or Team Leaders are available."
+                  />
+                  <label className="check-label">
+                    <input
+                      name={`teamSelfCheckinEnabled-${index}`}
+                      type="checkbox"
+                      defaultChecked={team.selfCheckinEnabled}
+                    />
+                    Enable location-bound self check-in
+                  </label>
+                </article>
+              ))}
+              {!teams.length && <Empty text="No event teams have been added to this template." />}
+            </div>
+            {!readOnly && (
+              <button
+                className="secondary full"
+                type="button"
+                onClick={() => setTeams((current) => [...current, { ...blankEventTemplateTeam }])}
+              >
+                <Plus size={16} /> Add team
+              </button>
+            )}
+          </section>
+
+          {!readOnly && (
+            <div className="email-template-actions">
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={form.isActive}
+                  onChange={(event) => setForm((value) => ({ ...value, isActive: event.target.checked }))}
+                />
+                Active template
+              </label>
+              <div className="card-actions">
+                <button className="secondary" type="button" onClick={startNew}>
+                  Clear
+                </button>
+                <button className="primary" disabled={saving}>
+                  {saving ? "Saving..." : selected ? "Save changes" : "Create template"}
+                </button>
+              </div>
+            </div>
+          )}
+        </form>
       </div>
     </>
   );
@@ -2991,6 +4027,7 @@ function Administration({
     | "system-roles"
     | "role-assignments"
     | "archived-events"
+    | "audit"
   >("home");
   const [counts, setCounts] = useState({
     volunteers: 0,
@@ -3000,7 +4037,8 @@ function Administration({
     roles: 0,
     systemRoles: 0,
     assignments: 0,
-    archivedEvents: 0
+    archivedEvents: 0,
+    audit: 0
   });
 
   useEffect(() => {
@@ -3012,9 +4050,10 @@ function Administration({
       api<MinistryRole[]>("/administration/roles"),
       api<SystemRole[]>("/administration/system-roles"),
       api<UserRoleAssignment[]>("/administration/role-assignments"),
-      api<ArchivedEvent[]>("/administration/archived-events")
+      api<ArchivedEvent[]>("/administration/archived-events"),
+      api<AuditLogItem[]>("/administration/audit-logs")
     ])
-      .then(([volunteers, tasks, campuses, ministries, roles, systemRoles, assignments, archivedEvents]) =>
+      .then(([volunteers, tasks, campuses, ministries, roles, systemRoles, assignments, archivedEvents, audit]) =>
         setCounts({
           volunteers: volunteers.length,
           tasks: tasks.length,
@@ -3023,7 +4062,8 @@ function Administration({
           roles: roles.length,
           systemRoles: systemRoles.length,
           assignments: assignments.length,
-          archivedEvents: archivedEvents.length
+          archivedEvents: archivedEvents.length,
+          audit: audit.length
         })
       )
       .catch((error) => notify((error as Error).message));
@@ -3040,6 +4080,7 @@ function Administration({
     return <RoleAssignmentMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "archived-events")
     return <ArchivedEventMaintenance notify={notify} close={() => setSection("home")} />;
+  if (section === "audit") return <AuditLogMaintenance notify={notify} close={() => setSection("home")} />;
 
   return (
     <>
@@ -3110,6 +4151,13 @@ function Administration({
           description="Review completed, cancelled, and removed events or restore them to Active or Draft."
           count={counts.archivedEvents}
           onClick={() => setSection("archived-events")}
+        />
+        <MaintenanceCard
+          icon={<ClipboardList />}
+          title="Audit"
+          description="Search activity logs for login, registration, creation, updates, volunteering, withdrawals, and messaging."
+          count={counts.audit}
+          onClick={() => setSection("audit")}
         />
       </div>
     </>
@@ -3694,6 +4742,96 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
           )}
         </div>
       </Card>
+    </>
+  );
+}
+
+function AuditLogMaintenance({ notify, close }: { notify: (m: string) => void; close: () => void }) {
+  const [logs, setLogs] = useState<AuditLogItem[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [submittedSearch, setSubmittedSearch] = useState("");
+  const load = useCallback(
+    () =>
+      api<AuditLogItem[]>(
+        `/administration/audit-logs${
+          submittedSearch.trim() ? `?q=${encodeURIComponent(submittedSearch.trim())}` : ""
+        }`
+      )
+        .then(setLogs)
+        .catch((error) => notify((error as Error).message)),
+    [submittedSearch, notify]
+  );
+  useEffect(() => void load(), [load]);
+
+  return (
+    <>
+      <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Audit" }]} />
+      <PageTitle
+        eyebrow="Administration"
+        title="Audit"
+        description="Review login, registration, creation, updates, volunteering, withdrawals, and other activity."
+      />
+      <section className="card audit-card">
+        <div className="card-header">
+          <h3>Audit Log</h3>
+        </div>
+        <form
+          className="maintenance-search audit-search"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setSubmittedSearch(searchTerm);
+          }}
+        >
+          <div className="search active">
+            <Search size={17} />
+            <input
+              type="search"
+              value={searchTerm}
+              placeholder="Search audit logs or user: Mouse"
+              aria-label="Search audit logs"
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+          </div>
+          <button className="primary" type="submit">
+            <Search size={16} /> Search
+          </button>
+        </form>
+        <div className="audit-table-wrap">
+          <table className="audit-log-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>User</th>
+                <th>Action</th>
+                <th>Module</th>
+                <th>Target</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((log) => (
+                <tr key={log.id}>
+                  <td>{formatDate(log.occurred_at)}</td>
+                  <td>
+                    <strong>{log.actor_name}</strong>
+                    {log.actor_email && <small>{log.actor_email}</small>}
+                  </td>
+                  <td>{formatAuditAction(log.action)}</td>
+                  <td>
+                    <span className="status neutral">{log.module}</span>
+                  </td>
+                  <td>
+                    <strong>{log.entity_name || formatRoleName(log.entity_type)}</strong>
+                    {log.entity_id && <small>{log.entity_id}</small>}
+                  </td>
+                  <td>{auditDetailsSummary(log.details)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!logs.length && <Empty text="No audit log entries match your search." />}
+        </div>
+      </section>
     </>
   );
 }
@@ -4321,20 +5459,27 @@ function RoleAssignmentMaintenance({ notify, close }: { notify: (m: string) => v
 
 function Profile({ notify }: { notify: (m: string) => void }) {
   const [profile, setProfile] = useState<Record<string, unknown>>({});
+  const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
   const [editing, setEditing] = useState(false);
   const [linkingFamily, setLinkingFamily] = useState(false);
   const load = () => api<Record<string, unknown>>("/me").then(setProfile);
   useEffect(() => {
     void load();
+    api<{ campuses: CampusCatalogItem[] }>("/catalog")
+      .then((catalog) => setCampuses(catalog.campuses))
+      .catch((error) => notify((error as Error).message));
   }, []);
   const household = (profile.household ?? []) as Array<Record<string, string | number>>;
+  const hasVolunteerProfile = Boolean(profile.volunteer_id);
+  const profileName =
+    personName(profile.first_name, profile.middle_name, profile.last_name) ||
+    String(profile.display_name || profile.email || "VolunteerHub user");
   const save = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
-    const data = Object.fromEntries(new FormData(formEvent.currentTarget));
-    try {
-      await api("/me", {
-        method: "PATCH",
-        body: JSON.stringify({
+    const formData = new FormData(formEvent.currentTarget);
+    const data = Object.fromEntries(formData);
+    const payload = hasVolunteerProfile
+      ? {
           firstName: data.firstName,
           middleName: data.middleName,
           lastName: data.lastName,
@@ -4345,7 +5490,19 @@ function Profile({ notify }: { notify: (m: string) => void }) {
           smsConsent: data.smsConsent === "on",
           emailOptIn: data.emailOptIn === "on",
           pushOptIn: data.pushOptIn === "on"
-        })
+        }
+      : {
+          displayName: data.displayName,
+          phone: data.phone
+        };
+    const payloadWithHomeCampuses = {
+      ...payload,
+      homeCampusIds: formData.getAll("homeCampusIds").map(String)
+    };
+    try {
+      await api("/me", {
+        method: "PATCH",
+        body: JSON.stringify(payloadWithHomeCampuses)
       });
       await load();
       setEditing(false);
@@ -4387,10 +5544,10 @@ function Profile({ notify }: { notify: (m: string) => void }) {
         <Card title="Your profile">
           <div className="profile-head">
             <div className="avatar large" aria-hidden="true">
-              {initials(personName(profile.first_name, profile.middle_name, profile.last_name))}
+              {initials(profileName)}
             </div>
             <span>
-              <h3>{personName(profile.first_name, profile.middle_name, profile.last_name)}</h3>
+              <h3>{profileName}</h3>
               <p>{String(profile.email ?? "")}</p>
             </span>
             {!editing && (
@@ -4400,63 +5557,92 @@ function Profile({ notify }: { notify: (m: string) => void }) {
             )}
           </div>
           <div className="profile-facts">
-            <span>
-              <ShieldCheck /> Application <strong>{String(profile.application_status ?? "")}</strong>
-            </span>
+            {hasVolunteerProfile ? (
+              <span>
+                <ShieldCheck /> Application <strong>{String(profile.application_status ?? "")}</strong>
+              </span>
+            ) : (
+              <span>
+                <ShieldCheck /> Access <strong>{((profile.roles as string[]) ?? []).map(formatRoleName).join(", ")}</strong>
+              </span>
+            )}
             <span>
               <MessageSquareText /> SMS consent <strong>{profile.sms_consent ? "Enabled" : "Disabled"}</strong>
+            </span>
+            <span>
+              <Building2 /> Home campus <strong>{String(profile.home_campus_name ?? "Campus not assigned")}</strong>
             </span>
           </div>
           {editing && (
             <form className="profile-form" onSubmit={save}>
-              <Field name="firstName" label="First name" defaultValue={String(profile.first_name ?? "")} />
-              <OptionalField
-                name="middleName"
-                label="Middle name (optional)"
-                defaultValue={String(profile.middle_name ?? "")}
-              />
-              <Field name="lastName" label="Last name" defaultValue={String(profile.last_name ?? "")} />
-              <div className="two-col">
-                <Field
-                  name="birthDate"
-                  label="Birth date"
-                  type="date"
-                  defaultValue={String(profile.birth_date ?? "").slice(0, 10)}
-                />
-                <label>
-                  Email
-                  <input value={String(profile.email ?? "")} readOnly />
-                </label>
-              </div>
+              {hasVolunteerProfile ? (
+                <>
+                  <Field name="firstName" label="First name" defaultValue={String(profile.first_name ?? "")} />
+                  <OptionalField
+                    name="middleName"
+                    label="Middle name (optional)"
+                    defaultValue={String(profile.middle_name ?? "")}
+                  />
+                  <Field name="lastName" label="Last name" defaultValue={String(profile.last_name ?? "")} />
+                  <div className="two-col">
+                    <Field
+                      name="birthDate"
+                      label="Birth date"
+                      type="date"
+                      defaultValue={String(profile.birth_date ?? "").slice(0, 10)}
+                    />
+                    <label>
+                      Email
+                      <input value={String(profile.email ?? "")} readOnly />
+                    </label>
+                  </div>
+                </>
+              ) : (
+                <div className="two-col">
+                  <Field name="displayName" label="Display name" defaultValue={profileName} />
+                  <label>
+                    Email
+                    <input value={String(profile.email ?? "")} readOnly />
+                  </label>
+                </div>
+              )}
               <Field name="phone" label="Mobile phone" type="tel" defaultValue={String(profile.phone ?? "")} />
-              <div className="two-col">
-                <OptionalField
-                  name="emergencyContactName"
-                  label="Emergency contact name"
-                  defaultValue={String(profile.emergency_contact_name ?? "")}
-                />
-                <OptionalField
-                  name="emergencyContactPhone"
-                  label="Emergency contact phone"
-                  type="tel"
-                  defaultValue={String(profile.emergency_contact_phone ?? "")}
-                />
-              </div>
-              <div className="profile-preferences">
-                <strong>Notification preferences</strong>
-                <label className="check-label">
-                  <input name="smsConsent" type="checkbox" defaultChecked={Boolean(profile.sms_consent)} />
-                  Receive SMS notifications
-                </label>
-                <label className="check-label">
-                  <input name="emailOptIn" type="checkbox" defaultChecked={Boolean(profile.email_opt_in)} />
-                  Receive email notifications
-                </label>
-                <label className="check-label">
-                  <input name="pushOptIn" type="checkbox" defaultChecked={Boolean(profile.push_opt_in)} />
-                  Receive push notifications
-                </label>
-              </div>
+              <CampusBubbleSelector
+                campuses={campuses}
+                selectedIds={(profile.home_campus_ids as string[]) ?? []}
+              />
+              {hasVolunteerProfile && (
+                <>
+                  <div className="two-col">
+                    <OptionalField
+                      name="emergencyContactName"
+                      label="Emergency contact name"
+                      defaultValue={String(profile.emergency_contact_name ?? "")}
+                    />
+                    <OptionalField
+                      name="emergencyContactPhone"
+                      label="Emergency contact phone"
+                      type="tel"
+                      defaultValue={String(profile.emergency_contact_phone ?? "")}
+                    />
+                  </div>
+                  <div className="profile-preferences">
+                    <strong>Notification preferences</strong>
+                    <label className="check-label">
+                      <input name="smsConsent" type="checkbox" defaultChecked={Boolean(profile.sms_consent)} />
+                      Receive SMS notifications
+                    </label>
+                    <label className="check-label">
+                      <input name="emailOptIn" type="checkbox" defaultChecked={Boolean(profile.email_opt_in)} />
+                      Receive email notifications
+                    </label>
+                    <label className="check-label">
+                      <input name="pushOptIn" type="checkbox" defaultChecked={Boolean(profile.push_opt_in)} />
+                      Receive push notifications
+                    </label>
+                  </div>
+                </>
+              )}
               <div className="profile-form-actions">
                 <button className="secondary" type="button" onClick={() => setEditing(false)}>
                   Cancel
@@ -4574,7 +5760,7 @@ function MaintenanceCard({
   icon: ReactNode;
   title: string;
   description: string;
-  count: number;
+  count?: number;
   onClick: () => void;
 }) {
   return (
@@ -4584,7 +5770,7 @@ function MaintenanceCard({
         <strong>{title}</strong>
         <small>{description}</small>
       </span>
-      <span className="maintenance-count">{count}</span>
+      {count !== undefined && <span className="maintenance-count">{count}</span>}
       <ChevronRight size={19} />
     </button>
   );
@@ -4802,6 +5988,70 @@ function LeaderSelector({
     </div>
   );
 }
+function CampusBubbleSelector({
+  campuses,
+  selectedIds,
+  inputName = "homeCampusIds",
+  title = "Home locations",
+  emptyLabel = "Add home location",
+  addAnotherLabel = "Add another location",
+  helpText = "My Campus includes these locations plus off-site events."
+}: {
+  campuses: CampusCatalogItem[];
+  selectedIds: string[];
+  inputName?: string;
+  title?: string;
+  emptyLabel?: string;
+  addAnotherLabel?: string;
+  helpText?: string;
+}) {
+  const [selected, setSelected] = useState(selectedIds);
+  const [campusId, setCampusId] = useState("");
+  const selectedCampuses = selected
+    .map((id) => campuses.find((campus) => campus.id === id))
+    .filter(Boolean) as CampusCatalogItem[];
+  const availableCampuses = campuses.filter((campus) => !selected.includes(campus.id));
+
+  return (
+    <div className="campus-bubble-selector">
+      <span className="leader-selector-title">{title}</span>
+      {selected.map((id) => (
+        <input key={id} name={inputName} type="hidden" value={id} />
+      ))}
+      <div className="campus-bubble-field">
+        {selectedCampuses.map((campus) => (
+          <button
+            className="campus-bubble"
+            type="button"
+            key={campus.id}
+            title={`Remove ${campus.name}`}
+            onClick={() => setSelected((current) => current.filter((id) => id !== campus.id))}
+          >
+            <Building2 size={14} />
+            <span>{campus.name}</span>
+            <X size={14} />
+          </button>
+        ))}
+        <select
+          value={campusId}
+          onChange={(event) => {
+            const nextCampusId = event.target.value;
+            if (nextCampusId) setSelected((current) => [...current, nextCampusId]);
+            setCampusId("");
+          }}
+        >
+          <option value="">{selected.length ? addAnotherLabel : emptyLabel}</option>
+          {availableCampuses.map((campus) => (
+            <option key={campus.id} value={campus.id}>
+              {campus.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <small className="form-help">{helpText}</small>
+    </div>
+  );
+}
 function Field({
   name,
   label,
@@ -4816,7 +6066,62 @@ function Field({
   return (
     <label>
       {label}
-      <input name={name} type={type} defaultValue={defaultValue} required />
+      <input
+        name={name}
+        type={type}
+        defaultValue={defaultValue}
+        step={type === "datetime-local" ? 1800 : undefined}
+        required
+      />
+    </label>
+  );
+}
+function DateTimeField({
+  name,
+  label,
+  defaultValue
+}: {
+  name: string;
+  label: string;
+  defaultValue?: string;
+}) {
+  const initial = splitDateTime(defaultValue);
+  const [date, setDate] = useState(initial.date);
+  const [hour, setHour] = useState(initial.hour);
+  const [minute, setMinute] = useState(initial.minute);
+  const [period, setPeriod] = useState(initial.period);
+  const hiddenValue = date ? `${date}T${toTwentyFourHour(hour, period)}:${minute}` : "";
+
+  return (
+    <label className="datetime-field">
+      {label}
+      <input name={name} type="hidden" value={hiddenValue} />
+      <div className="datetime-control">
+        <input
+          className="datetime-date"
+          type="date"
+          value={date}
+          required
+          onChange={(event) => setDate(event.target.value)}
+        />
+        <select aria-label={`${label} hour`} value={hour} onChange={(event) => setHour(event.target.value)}>
+          {hourOptions.map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+        <select aria-label={`${label} minute`} value={minute} onChange={(event) => setMinute(event.target.value)}>
+          <option value="00">00</option>
+          <option value="15">15</option>
+          <option value="30">30</option>
+          <option value="45">45</option>
+        </select>
+        <select aria-label={`${label} AM or PM`} value={period} onChange={(event) => setPeriod(event.target.value)}>
+          <option value="AM">AM</option>
+          <option value="PM">PM</option>
+        </select>
+      </div>
     </label>
   );
 }
@@ -4842,12 +6147,16 @@ function LocationField({
   name,
   label,
   value,
-  onChange
+  onChange,
+  required = true,
+  disabled = false
 }: {
   name: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
+  required?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <label>
@@ -4857,7 +6166,8 @@ function LocationField({
         type="number"
         step="any"
         value={value}
-        required
+        required={required}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>
@@ -4899,6 +6209,20 @@ function eventLocation(event: EventItem) {
     ? event.address
     : event.campus_name;
 }
+function eventMatchesHomeCampus(event: EventItem, session: Session) {
+  if (event.matches_home_campus) return true;
+  const participatingCampusIds = event.participating_campus_ids ?? [];
+  if (session.homeCampusIds.some((campusId) => participatingCampusIds.includes(campusId))) return true;
+  if (session.homeCampusIds.includes(event.campus_id)) return true;
+
+  const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
+  const homeCampusNames = session.homeCampus
+    .split(",")
+    .map(normalize)
+    .filter(Boolean);
+  const eventCampusNames = [event.campus_name, ...(event.participating_campus_names ?? [])].map(normalize);
+  return homeCampusNames.some((homeCampusName) => eventCampusNames.includes(homeCampusName));
+}
 function googleMapsDirectionsUrl(location: {
   latitude: number;
   longitude: number;
@@ -4923,4 +6247,23 @@ function commitmentLocation(commitment: CommitmentItem) {
 function toDateTimeLocal(value: string) {
   const date = new Date(value);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+const hourOptions = Array.from({ length: 12 }, (_, index) => String(index === 0 ? 12 : index).padStart(2, "0"));
+function splitDateTime(value?: string) {
+  const [date = "", time = ""] = value?.split("T") ?? [];
+  const [rawHour = "09", rawMinute = "00"] = time.split(":");
+  const hour24 = Number(rawHour);
+  const period = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return {
+    date,
+    hour: String(hour12).padStart(2, "0"),
+    minute: Number(rawMinute) >= 30 ? "30" : "00",
+    period
+  };
+}
+function toTwentyFourHour(hour: string, period: string) {
+  const hourNumber = Number(hour);
+  if (period === "AM") return String(hourNumber === 12 ? 0 : hourNumber).padStart(2, "0");
+  return String(hourNumber === 12 ? 12 : hourNumber + 12).padStart(2, "0");
 }

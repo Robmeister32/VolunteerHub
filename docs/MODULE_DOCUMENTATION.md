@@ -53,7 +53,7 @@ VolunteerHub uses an extensible role catalog. The seeded roles are:
 | `TEAM_LEADER` | May be assigned as an Event Team leader; supported by the role catalog and leader validation |
 | `VOLUNTEER` | Profile, household, signup, commitments, tasks, check-in, and communication access |
 
-Important implementation detail: API TypeScript types explicitly list `ADMIN`, `EVENT_LEADER`, and `VOLUNTEER`, while the database and event-team leader validation also support `TEAM_LEADER`. The role catalog is extensible, but API guards must be updated before a new role can receive route-level permissions.
+Important implementation detail: API TypeScript types explicitly list the seeded roles. The role catalog is extensible, but API guards must be updated before a new role can receive route-level permissions.
 
 ## 4. Module Summary
 
@@ -85,18 +85,20 @@ Connects Firebase identities to VolunteerHub domain users, loads assigned system
 - Public registration creates a Firebase account in the client and a VolunteerHub profile through `POST /api/auth/register`.
 - Existing identities sign in through Firebase Email/Password authentication.
 - `GET /api/me` returns the domain profile, roles, volunteer ID, ministry assignments, preferences, and household.
+- Users can update one or more home campus locations from their profile; the first selected campus remains the compatibility/default campus.
 - Administrators can create and update role definitions and replace a user's complete role assignment set.
 - A command-line provisioning workflow creates or activates the first administrator.
 
 ### Core data
 
-`app_users`, `roles`, `app_user_roles`, `leader_ministries`
+`app_users`, `user_home_campuses`, `roles`, `app_user_roles`, `leader_ministries`
 
 ### Business rules
 
 - A valid Firebase token is required for all protected endpoints.
 - A Firebase identity without an active VolunteerHub domain user receives a `403` response.
 - User status must be `ACTIVE` for domain access.
+- Home campus assignments must reference active campuses.
 - Public registration cannot create a second VolunteerHub profile for the same Firebase UID.
 - Every user role assignment update must contain at least one role.
 - Assigned role codes must exist and be active.
@@ -271,28 +273,32 @@ Creates scheduled events and the Event Teams within them, assigns leaders, defin
 
 ### Functional specifications
 
-- Administrators create and edit events.
+- Administrators create and edit events; administrators and event leaders can create one-off draft events from Tools.
 - New events always begin as `DRAFT`.
+- One-off events may use a campus location or an off-site address, store participating campus IDs to target nearby participant campuses, and create initial Event Teams in the same workflow.
 - Events contain one or more Event Teams.
 - Each Event Team has leaders, staffing target, signup policy, movement policy, self-check-in setting, instructions, and active state.
+- Administrators and event leaders can create reusable event templates with preconfigured event details and Event Teams for later bulk scheduling.
+- Administrators and event leaders can generate up to 24 draft event instances from an event template using daily or weekly interval options.
 - Leaders and administrators can view active and draft upcoming events; volunteers see active upcoming events.
 - Archived administration lists non-active/non-draft events from the previous 18 months.
 
 ### Primary API surface
 
-`GET/POST/PATCH /api/events`, `POST /api/events/:eventId/groups`, `PATCH /api/event-groups/:eventGroupId`, archived-event and status endpoints
+`GET/POST/PATCH /api/events`, `POST /api/events/:eventId/groups`, `PATCH /api/event-groups/:eventGroupId`, `GET/POST/PATCH /api/tools/event-templates`, `POST /api/tools/event-templates/:id/create-events`, archived-event and status endpoints
 
 ### Core data and views
 
-`events`, `event_groups`, `event_group_staffing`, `event_staffing_summary`
+`events`, `event_groups`, `event_templates`, `event_group_staffing`, `event_staffing_summary`
 
 ### Business rules
 
 - Event statuses are `DRAFT`, `ACTIVE`, `COMPLETE`, `CANCELLED`, and `REMOVED`.
 - Event end time must be after start time.
-- Events belong to a campus.
+- Events keep a campus anchor for compatibility and may also define participating campuses for filtering and volunteer targeting.
 - Event leader IDs must reference active administrators or event leaders.
 - Event Team leader IDs must reference active administrators, event leaders, or team leaders.
+- Event template leader IDs must pass the same event-leader and Event Team leader eligibility checks as scheduled events.
 - Event Team names are unique within an event.
 - Required volunteer count cannot be negative.
 - Signup and movement policy values are `AUTO` or `APPROVAL`.
@@ -443,7 +449,7 @@ Queues multi-channel announcements targeted by ministry, event, and audience met
 
 ### Functional specifications
 
-- Administrators and event leaders can create broadcasts.
+- Administrators, event leaders, and team leaders can create broadcasts within their permitted event or event-team scope.
 - Supported channels are push, email, and SMS.
 - Broadcast records include subject, message, selected channels, optional ministry/event target, and an audience filter.
 - Broadcast history is visible to administrators and leaders within permitted scope.
@@ -460,8 +466,9 @@ Queues multi-channel announcements targeted by ministry, event, and audience met
 ### Business rules
 
 - At least one supported channel is required.
-- Event leaders who are not administrators must select a ministry assigned to them.
-- Administrators can broadcast without a ministry restriction.
+- Administrators can broadcast at event level without an event-team restriction.
+- Event leaders can broadcast at event level for assigned events.
+- Team leaders can broadcast only to event teams they lead.
 - New broadcasts enter `QUEUED`.
 - A unique delivery row is allowed per broadcast, recipient, and channel.
 - Delivery states support queued, sent, delivered, failed, skipped, and unsubscribed outcomes.
@@ -521,12 +528,13 @@ Provides role-aware operational metrics, staffing/compliance reports, service hi
 - The operational dashboard shows upcoming events, pending assignments, pending applications, and expiring compliance.
 - Event leaders receive metrics limited to their event leadership scope for upcoming events and pending assignments.
 - The reporting endpoint returns staffing, attendance, compliance, and the 25 most recent audit records.
+- Administrators can review searchable audit logs, including `module:{module wildcard}` searches.
 - Administrators can export volunteers, events, and assignments as CSV.
 - Derived views supply reusable reporting projections.
 
 ### Primary API surface
 
-`GET /api/dashboard`, `GET /api/reports/overview`, `GET /api/exports/:type.csv`
+`GET /api/dashboard`, `GET /api/reports/overview`, `GET /api/administration/audit-logs`, `GET /api/exports/:type.csv`
 
 ### Core views and data
 
@@ -539,7 +547,7 @@ Provides role-aware operational metrics, staffing/compliance reports, service hi
 - Supported export types are `volunteers`, `events`, and `assignments`.
 - CSV values are quoted and embedded quotes are escaped.
 - Administrator-only dashboard metrics, such as pending applications and expiring compliance, are hidden from non-admin leaders.
-- Audit logs preserve actor, action, entity, details, and occurrence time.
+- Audit logs preserve actor, action, module, entity, details, and occurrence time.
 - Audit entity references are intentionally polymorphic and do not use foreign keys.
 
 ### Boundaries and notes
@@ -643,7 +651,7 @@ These items are important when treating this document as a product specification
 5. Waitlisted volunteers are not automatically promoted when capacity opens.
 6. Broadcast and SMS relay provider workers are not included.
 7. The planning web application's non-overview sections and several displayed metrics are static.
-8. `TEAM_LEADER` exists in the database catalog but is not included in the API's `UserRole` TypeScript union.
+8. The role catalog is extensible, but new role codes require API and client guard updates before they receive functional access.
 9. The overview reporting endpoint is not filtered to an event leader's scope.
 10. Private document/photo storage paths are modeled, but upload and signed-download routes are not implemented.
 

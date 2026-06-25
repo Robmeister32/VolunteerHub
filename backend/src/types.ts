@@ -1,7 +1,7 @@
 import type { Request } from "express";
 import type { DecodedIdToken } from "firebase-admin/auth";
 
-export type UserRole = "ADMIN" | "EVENT_LEADER" | "VOLUNTEER";
+export type UserRole = "ADMIN" | "EVENT_LEADER" | "TEAM_LEADER" | "VOLUNTEER";
 
 export interface AuthUser {
   id: string;

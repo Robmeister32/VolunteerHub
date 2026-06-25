@@ -168,8 +168,23 @@ app.post(
       }
       return { userId: user.id, volunteerId: volunteer.id };
     });
+    await audit(result.userId, "USER_REGISTERED", "auth", result.userId, {
+      email: req.firebase!.email?.toLowerCase()
+    });
     await audit(result.userId, "APPLICATION_SUBMITTED", "volunteer", result.volunteerId);
     res.status(201).json({ message: "Application submitted for review" });
+  })
+);
+
+app.post(
+  "/api/auth/login",
+  requireAuth,
+  route(async (req, res) => {
+    await audit(req.user!.id, "USER_LOGIN", "auth", req.user!.id, {
+      email: req.user!.email,
+      roles: req.user!.roles
+    });
+    res.json({ message: "Login recorded" });
   })
 );
 
@@ -180,7 +195,26 @@ app.get(
     const profile = await get(
       `select u.id, u.email, u.phone,
       coalesce(nullif(u.display_name,''),nullif(concat_ws(' ',v.first_name,v.middle_name,v.last_name),''),u.email) display_name,
-      coalesce(hc.name,(select name from campuses where is_active order by created_at,id limit 1),'Campus not assigned') home_campus_name,
+      coalesce(
+        (select string_agg(c.name, ', ' order by uhc.is_primary desc, c.name)
+         from user_home_campuses uhc join campuses c on c.id=uhc.campus_id
+         where uhc.user_id=u.id),
+        hc.name,
+        (select name from campuses where is_active order by created_at,id limit 1),
+        'Campus not assigned'
+      ) home_campus_name,
+      coalesce(
+        (select array_agg(uhc.campus_id order by uhc.is_primary desc, c.name)
+         from user_home_campuses uhc join campuses c on c.id=uhc.campus_id
+         where uhc.user_id=u.id),
+        case when u.home_campus_id is null then '{}'::uuid[] else array[u.home_campus_id] end
+      ) home_campus_ids,
+      coalesce(
+        (select jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name) order by uhc.is_primary desc, c.name)
+         from user_home_campuses uhc join campuses c on c.id=uhc.campus_id
+         where uhc.user_id=u.id),
+        '[]'::jsonb
+      ) home_campuses,
       (select coalesce(array_agg(aur.role_code order by aur.role_code), '{}') from app_user_roles aur where aur.user_id=u.id) roles,
       u.status, v.id volunteer_id, v.first_name, v.middle_name, v.last_name,
       v.birth_date, v.profile_photo_path profile_photo_url, v.application_status,
@@ -208,75 +242,134 @@ app.patch(
   "/api/me",
   requireAuth,
   route(async (req, res) => {
-    if (!req.user!.volunteerId) return void res.status(400).json({ error: "No volunteer profile" });
+    const optionalText = (max = 300) =>
+      z.preprocess(
+        (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+        z.string().trim().max(max).optional()
+      );
     const body = z
       .object({
-        firstName: z.string().trim().min(1).optional(),
+        displayName: optionalText(200),
+        firstName: optionalText(100),
         middleName: z.string().trim().optional(),
-        lastName: z.string().trim().min(1).optional(),
-        birthDate: z.coerce.date().optional(),
-        phone: z.string().min(7).optional(),
-        emergencyContactName: z.string().optional(),
-        emergencyContactPhone: z.string().optional(),
+        lastName: optionalText(100),
+        birthDate: z.preprocess(
+          (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+          z.coerce.date().optional()
+        ),
+        phone: optionalText(40),
+        emergencyContactName: optionalText(200),
+        emergencyContactPhone: optionalText(40),
         profilePhotoPath: z.string().nullable().optional(),
         smsConsent: z.boolean().optional(),
         emailOptIn: z.boolean().optional(),
-        pushOptIn: z.boolean().optional()
+        pushOptIn: z.boolean().optional(),
+        homeCampusIds: z.array(uuid).optional()
       })
       .parse(req.body);
     await transaction(async (client) => {
-      await client.query(
-        `update app_users u set
-         phone=coalesce($1,u.phone),
-         middle_name=case when $2 then $3 else u.middle_name end,
-         display_name=case when $4 then concat_ws(' ',coalesce($5,v.first_name),case when $2 then $3 else v.middle_name end,coalesce($6,v.last_name)) else u.display_name end
-         from volunteer_profiles v where v.id=$7 and u.id=$8`,
-        [
-          body.phone ?? null,
-          body.middleName !== undefined,
-          body.middleName || null,
-          body.firstName !== undefined || body.middleName !== undefined || body.lastName !== undefined,
-          body.firstName ?? null,
-          body.lastName ?? null,
-          req.user!.volunteerId,
+      if (body.homeCampusIds !== undefined) {
+        const homeCampusIds = [...new Set(body.homeCampusIds)];
+        if (homeCampusIds.length) {
+          const campusResult = await client.query<{ count: number }>(
+            "select count(*)::int count from campuses where id=any($1::uuid[]) and is_active",
+            [homeCampusIds]
+          );
+          if (campusResult.rows[0]?.count !== homeCampusIds.length)
+            throw new ApiError("One or more selected home campuses are invalid or inactive", 422);
+        }
+        await client.query("delete from user_home_campuses where user_id=$1", [req.user!.id]);
+        for (const [index, campusId] of homeCampusIds.entries()) {
+          await client.query(
+            "insert into user_home_campuses(user_id, campus_id, is_primary) values($1,$2,$3)",
+            [req.user!.id, campusId, index === 0]
+          );
+        }
+        await client.query("update app_users set home_campus_id=$1 where id=$2", [
+          homeCampusIds[0] ?? null,
           req.user!.id
-        ]
-      );
-      await client.query(
-        `update volunteer_profiles set first_name=coalesce($1,first_name),
-       middle_name=case when $2 then $3 else middle_name end,last_name=coalesce($4,last_name),
-       birth_date=coalesce($5,birth_date),emergency_contact_name=coalesce($6,emergency_contact_name),
-       emergency_contact_phone=coalesce($7,emergency_contact_phone),profile_photo_path=coalesce($8,profile_photo_path)
-       where id=$9`,
-        [
-          body.firstName ?? null,
-          body.middleName !== undefined,
-          body.middleName || null,
-          body.lastName ?? null,
-          body.birthDate ?? null,
-          body.emergencyContactName ?? null,
-          body.emergencyContactPhone ?? null,
-          body.profilePhotoPath ?? null,
-          req.user!.volunteerId
-        ]
-      );
-      if (body.middleName !== undefined) {
-        await client.query("update household_members set middle_name=$1 where volunteer_id=$2", [
-          body.middleName || null,
-          req.user!.volunteerId
         ]);
       }
-      await client.query(
-        `insert into notification_preferences(volunteer_id, sms_enabled, email_enabled, push_enabled)
-       values ($1, coalesce($2, false), coalesce($3, true), coalesce($4, true))
-       on conflict(volunteer_id) do update set
-       sms_enabled=coalesce($2, notification_preferences.sms_enabled),
-       email_enabled=coalesce($3, notification_preferences.email_enabled),
-       push_enabled=coalesce($4, notification_preferences.push_enabled)`,
-        [req.user!.volunteerId, body.smsConsent ?? null, body.emailOptIn ?? null, body.pushOptIn ?? null]
-      );
+      if (req.user!.volunteerId) {
+        await client.query(
+          `update app_users u set
+           phone=coalesce($1,u.phone),
+           middle_name=case when $2 then $3 else u.middle_name end,
+           display_name=case when $4 then concat_ws(' ',coalesce($5,v.first_name),case when $2 then $3 else v.middle_name end,coalesce($6,v.last_name)) else u.display_name end
+           from volunteer_profiles v where v.id=$7 and u.id=$8`,
+          [
+            body.phone ?? null,
+            body.middleName !== undefined,
+            body.middleName || null,
+            body.firstName !== undefined || body.middleName !== undefined || body.lastName !== undefined,
+            body.firstName ?? null,
+            body.lastName ?? null,
+            req.user!.volunteerId,
+            req.user!.id
+          ]
+        );
+        await client.query(
+          `update volunteer_profiles set first_name=coalesce($1,first_name),
+         middle_name=case when $2 then $3 else middle_name end,last_name=coalesce($4,last_name),
+         birth_date=coalesce($5,birth_date),emergency_contact_name=coalesce($6,emergency_contact_name),
+         emergency_contact_phone=coalesce($7,emergency_contact_phone),profile_photo_path=coalesce($8,profile_photo_path)
+         where id=$9`,
+          [
+            body.firstName ?? null,
+            body.middleName !== undefined,
+            body.middleName || null,
+            body.lastName ?? null,
+            body.birthDate ?? null,
+            body.emergencyContactName ?? null,
+            body.emergencyContactPhone ?? null,
+            body.profilePhotoPath ?? null,
+            req.user!.volunteerId
+          ]
+        );
+        if (body.middleName !== undefined) {
+          await client.query("update household_members set middle_name=$1 where volunteer_id=$2", [
+            body.middleName || null,
+            req.user!.volunteerId
+          ]);
+        }
+        await client.query(
+          `insert into notification_preferences(volunteer_id, sms_enabled, email_enabled, push_enabled)
+         values ($1, coalesce($2, false), coalesce($3, true), coalesce($4, true))
+         on conflict(volunteer_id) do update set
+         sms_enabled=coalesce($2, notification_preferences.sms_enabled),
+         email_enabled=coalesce($3, notification_preferences.email_enabled),
+         push_enabled=coalesce($4, notification_preferences.push_enabled)`,
+          [req.user!.volunteerId, body.smsConsent ?? null, body.emailOptIn ?? null, body.pushOptIn ?? null]
+        );
+      } else {
+        const displayName =
+          body.displayName ??
+          [body.firstName, body.middleName, body.lastName]
+            .map((part) => part?.trim())
+            .filter(Boolean)
+            .join(" ");
+        await client.query(
+          `update app_users set
+           phone=coalesce($1, phone),
+           middle_name=case when $2 then $3 else middle_name end,
+           display_name=case when $4::text is not null then $4 else display_name end
+           where id=$5`,
+          [
+            body.phone ?? null,
+            body.middleName !== undefined,
+            body.middleName || null,
+            displayName || null,
+            req.user!.id
+          ]
+        );
+      }
     });
-    await audit(req.user!.id, "PROFILE_UPDATED", "volunteer", req.user!.volunteerId);
+    await audit(
+      req.user!.id,
+      "PROFILE_UPDATED",
+      req.user!.volunteerId ? "volunteer" : "app_user",
+      req.user!.volunteerId ?? req.user!.id
+    );
     res.json({ message: "Profile updated" });
   })
 );
@@ -449,19 +542,26 @@ app.get(
 app.get(
   "/api/tools/email-templates",
   requireAuth,
-  requireRole("ADMIN", "EVENT_LEADER"),
+  requireRole("ADMIN", "EVENT_LEADER", "TEAM_LEADER"),
   route(async (req, res) => {
     const isAdmin = hasRole(req.user!, "ADMIN");
+    const canManageTemplates = isAdmin || hasRole(req.user!, "EVENT_LEADER");
     const rows = await all<Record<string, unknown>>(
       `select et.*, coalesce(u.display_name, u.email) creator_name
        from email_templates et
        join app_users u on u.id=et.created_by
        where $1::boolean
           or et.created_by=$2
+          or ($3::boolean and et.is_active)
        order by et.is_active desc, et.updated_at desc, et.name`,
-      [isAdmin, req.user!.id]
+      [isAdmin, req.user!.id, !canManageTemplates]
     );
-    res.json(rows.map((row) => ({ ...row, can_edit: isAdmin || row.created_by === req.user!.id })));
+    res.json(
+      rows.map((row) => ({
+        ...row,
+        can_edit: isAdmin || (hasRole(req.user!, "EVENT_LEADER") && row.created_by === req.user!.id)
+      }))
+    );
   })
 );
 
@@ -904,12 +1004,29 @@ app.get(
         ? requestedVolunteerId
         : req.user!.volunteerId;
     const visibleStatuses =
-      !serveMode && (hasRole(req.user!, "ADMIN") || hasRole(req.user!, "EVENT_LEADER"))
+      hasRole(req.user!, "ADMIN") || hasRole(req.user!, "EVENT_LEADER")
         ? ["ACTIVE", "DRAFT"]
         : ["ACTIVE"];
     const events = await all<Record<string, unknown>>(
       `select e.*, c.name campus_name,
        concat_ws(', ', c.address_line_1, nullif(c.address_line_2, ''), c.city, c.region || ' ' || c.postal_code) campus_address,
+       coalesce((
+         select array_agg(pc.name order by pc.name)
+         from campuses pc
+         where pc.id=any(e.participating_campus_ids)
+       ), '{}') participating_campus_names,
+       (
+         exists (
+           select 1 from user_home_campuses uhc
+           where uhc.user_id=$3
+             and (uhc.campus_id=e.campus_id or uhc.campus_id=any(e.participating_campus_ids))
+         )
+         or exists (
+           select 1 from app_users u
+           where u.id=$3 and u.home_campus_id is not null
+             and (u.home_campus_id=e.campus_id or u.home_campus_id=any(e.participating_campus_ids))
+         )
+       ) matches_home_campus,
        s.required_count, s.confirmed_count
      from events e join campuses c on c.id=e.campus_id
      join event_staffing_summary s on s.event_id=e.id
@@ -921,7 +1038,7 @@ app.get(
          or c.name ilike '%' || $2 || '%'
          or exists (select 1 from event_groups search_group where search_group.event_id=e.id and search_group.name ilike '%' || $2 || '%'))
      order by e.starts_at`,
-      [visibleStatuses, search ?? null]
+      [visibleStatuses, search ?? null, req.user!.id]
     );
     for (const event of events) {
       event.groups = await all(
@@ -947,14 +1064,50 @@ const eventGroupInput = z.object({
   instructions: z.string().trim().default(""),
   leaderUserIds: z.array(uuid).default([]),
   requiredVolunteerCount: z.number().int().nonnegative(),
-  signupPolicy: z.enum(["AUTO", "APPROVAL"]),
-  movementPolicy: z.enum(["AUTO", "APPROVAL"]),
+  signupPolicy: z.enum(["AUTO", "APPROVAL"]).default("AUTO"),
+  movementPolicy: z.enum(["AUTO", "APPROVAL"]).default("AUTO"),
   selfCheckinEnabled: z.boolean().default(false),
   isActive: z.boolean().default(true)
 });
 
+const eventTemplateTeamInput = eventGroupInput.omit({ isActive: true });
+const eventTemplateInput = z.object({
+  name: z.string().trim().min(2).max(160),
+  description: z.string().trim().max(4000).default(""),
+  eventLeaderUserIds: z.array(uuid).default([]),
+  teams: z.array(eventTemplateTeamInput).default([]),
+  isActive: z.boolean().default(true)
+});
+const eventTemplateScheduleInput = z.object({
+  eventName: z.string().trim().min(2).max(200),
+  description: z.string().trim().default(""),
+  campusId: uuid,
+  address: z.string().trim().min(1).max(500),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  startsAt: z.iso.datetime(),
+  endsAt: z.iso.datetime(),
+  occurrence: z.number().int().min(1).max(24).default(1),
+  interval: z
+    .enum([
+      "DAILY",
+      "WEEKLY",
+      "EVERY_2_WEEKS",
+      "EVERY_3_WEEKS",
+      "EVERY_4_WEEKS",
+      "EVERY_5_WEEKS",
+      "EVERY_6_WEEKS",
+      "EVERY_7_WEEKS",
+      "EVERY_8_WEEKS"
+    ])
+    .default("WEEKLY"),
+  eventLeaderUserIds: z.array(uuid).min(1)
+});
+
 const eventInput = z.object({
   campusId: uuid,
+  locationType: z.enum(["CAMPUS", "OFF_SITE"]).default("CAMPUS"),
+  participatingCampusIds: z.array(uuid).default([]),
   name: z.string().trim().min(2),
   description: z.string().trim().default(""),
   startsAt: z.iso.datetime(),
@@ -962,10 +1115,20 @@ const eventInput = z.object({
   address: z.string().trim(),
   latitude: z.number(),
   longitude: z.number(),
-  eventLeaderUserIds: z.array(uuid).default([])
+  eventLeaderUserIds: z.array(uuid).default([]),
+  teams: z.array(eventTemplateTeamInput).default([])
 });
 const eventStatus = z.enum(["ACTIVE", "COMPLETE", "DRAFT", "CANCELLED", "REMOVED"]);
 const eventUpdateInput = eventInput.extend({ status: eventStatus });
+
+async function validateCampusIds(ids: string[]) {
+  if (!ids.length) return;
+  const result = await get<{ count: number }>(
+    "select count(distinct id)::int count from campuses where id=any($1::uuid[]) and is_active",
+    [ids]
+  );
+  if (result?.count !== new Set(ids).size) throw new ApiError("One or more selected campuses are invalid", 422);
+}
 
 async function validateLeaderIds(ids: string[], eligibleRoles: string[], leaderType: string) {
   if (!ids.length) return;
@@ -983,32 +1146,262 @@ const validateEventLeaderIds = (ids: string[]) => validateLeaderIds(ids, ["ADMIN
 const validateTeamLeaderIds = (ids: string[]) =>
   validateLeaderIds(ids, ["ADMIN", "EVENT_LEADER", "TEAM_LEADER"], "team");
 
+async function validateEventTemplate(body: z.infer<typeof eventTemplateInput>) {
+  await validateEventLeaderIds(body.eventLeaderUserIds);
+  for (const team of body.teams) await validateTeamLeaderIds(team.leaderUserIds);
+}
+
+function eventTemplateIntervalDays(interval: z.infer<typeof eventTemplateScheduleInput>["interval"]) {
+  if (interval === "DAILY") return 1;
+  if (interval === "WEEKLY") return 7;
+  return Number(interval.match(/\d+/)?.[0] ?? 1) * 7;
+}
+
+function addDays(value: Date, days: number) {
+  return new Date(value.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+app.get(
+  "/api/tools/event-templates",
+  requireAuth,
+  requireRole("ADMIN", "EVENT_LEADER"),
+  route(async (req, res) => {
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    const rows = await all<Record<string, unknown>>(
+      `select et.*, coalesce(u.display_name, u.email) creator_name
+       from event_templates et
+       join app_users u on u.id=et.created_by
+       where $1::boolean or et.created_by=$2
+       order by et.is_active desc, et.updated_at desc, et.name`,
+      [isAdmin, req.user!.id]
+    );
+    res.json(rows.map((row) => ({ ...row, can_edit: isAdmin || row.created_by === req.user!.id })));
+  })
+);
+
+app.post(
+  "/api/tools/event-templates",
+  requireAuth,
+  requireRole("ADMIN", "EVENT_LEADER"),
+  route(async (req, res) => {
+    const body = eventTemplateInput.parse(req.body);
+    await validateEventTemplate(body);
+    const template = await get<Record<string, unknown>>(
+      `insert into event_templates(
+        name, description, event_leader_user_ids, teams, created_by, is_active
+       )
+       values($1,$2,$3,$4::jsonb,$5,$6)
+       returning *`,
+      [
+        body.name,
+        body.description,
+        body.eventLeaderUserIds,
+        JSON.stringify(body.teams),
+        req.user!.id,
+        body.isActive
+      ]
+    );
+    await audit(req.user!.id, "EVENT_TEMPLATE_CREATED", "event_template", String(template!.id));
+    res.status(201).json(template);
+  })
+);
+
+app.patch(
+  "/api/tools/event-templates/:id",
+  requireAuth,
+  requireRole("ADMIN", "EVENT_LEADER"),
+  route(async (req, res) => {
+    const id = uuid.parse(req.params.id);
+    const body = eventTemplateInput.parse(req.body);
+    await validateEventTemplate(body);
+    const existing = await get<{ created_by: string }>("select created_by from event_templates where id=$1", [id]);
+    if (!existing) throw new ApiError("Event template not found", 404);
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    if (!isAdmin && existing.created_by !== req.user!.id)
+      throw new ApiError("Only the template creator can edit this template", 403);
+    const template = await get<Record<string, unknown>>(
+      `update event_templates set
+         name=$2, description=$3, event_leader_user_ids=$4, teams=$5::jsonb, is_active=$6
+       where id=$1 returning *`,
+      [
+        id,
+        body.name,
+        body.description,
+        body.eventLeaderUserIds,
+        JSON.stringify(body.teams),
+        body.isActive
+      ]
+    );
+    await audit(req.user!.id, "EVENT_TEMPLATE_UPDATED", "event_template", id);
+    res.json(template);
+  })
+);
+
+app.post(
+  "/api/tools/event-templates/:id/create-events",
+  requireAuth,
+  requireRole("ADMIN", "EVENT_LEADER"),
+  route(async (req, res) => {
+    const id = uuid.parse(req.params.id);
+    const body = eventTemplateScheduleInput.parse(req.body);
+    const startsAt = new Date(body.startsAt);
+    const endsAt = new Date(body.endsAt);
+    if (endsAt <= startsAt) throw new ApiError("End date must be after start date", 422);
+    await validateEventLeaderIds(body.eventLeaderUserIds);
+
+    const campus = await get<{ id: string }>("select id from campuses where id=$1 and is_active", [body.campusId]);
+    if (!campus) throw new ApiError("Selected campus is not available", 422);
+
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    const template = await get<{
+      id: string;
+      created_by: string;
+      teams: z.infer<typeof eventTemplateTeamInput>[];
+    }>(
+      `select id, created_by, teams
+       from event_templates
+       where id=$1 and is_active and ($2::boolean or created_by=$3)`,
+      [id, isAdmin, req.user!.id]
+    );
+    if (!template) throw new ApiError("Event template not found", 404);
+    for (const team of template.teams) await validateTeamLeaderIds(team.leaderUserIds);
+
+    const intervalDays = eventTemplateIntervalDays(body.interval);
+    const created = await transaction(async (client) => {
+      const eventIds: string[] = [];
+      for (let index = 0; index < body.occurrence; index += 1) {
+        const occurrenceStartsAt = addDays(startsAt, intervalDays * index);
+        const occurrenceEndsAt = addDays(endsAt, intervalDays * index);
+        const event = (
+          await client.query<{ id: string }>(
+            `insert into events(campus_id,name,description,starts_at,ends_at,address,latitude,longitude,event_leader_user_ids,status,created_by,
+              location_type,participating_campus_ids)
+             values($1,$2,$3,$4,$5,$6,$7,$8,$9,'DRAFT',$10,'CAMPUS',array[$1]::uuid[]) returning id`,
+            [
+              body.campusId,
+              body.eventName,
+              body.description,
+              occurrenceStartsAt.toISOString(),
+              occurrenceEndsAt.toISOString(),
+              body.address,
+              body.latitude,
+              body.longitude,
+              body.eventLeaderUserIds,
+              req.user!.id
+            ]
+          )
+        ).rows[0]!;
+        eventIds.push(event.id);
+
+        for (const team of template.teams) {
+          await client.query(
+            `insert into event_groups(event_id,name,description,instructions,leader_user_ids,required_volunteer_count,
+              signup_policy,movement_policy,self_checkin_enabled,is_active)
+             values($1,$2,$3,$4,$5,$6,$7,$8,$9,true)`,
+            [
+              event.id,
+              team.name,
+              team.description,
+              team.instructions,
+              team.leaderUserIds,
+              team.requiredVolunteerCount,
+              team.signupPolicy,
+              team.movementPolicy,
+              team.selfCheckinEnabled
+            ]
+          );
+        }
+      }
+      return eventIds;
+    });
+
+    await audit(req.user!.id, "EVENTS_CREATED_FROM_TEMPLATE", "event_template", id, {
+      ...body,
+      createdEventIds: created
+    });
+    res.status(201).json({ eventIds: created, createdCount: created.length });
+  })
+);
+
+app.get(
+  "/api/tools/event-template-leaders",
+  requireAuth,
+  requireRole("ADMIN", "EVENT_LEADER"),
+  route(async (_req, res) => {
+    res.json({
+      eventLeaders: await all(
+        `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
+         from app_users u join app_user_roles aur on aur.user_id=u.id
+         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER')
+         group by u.id
+         order by coalesce(display_name, email), email`
+      ),
+      teamLeaders: await all(
+        `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
+         from app_users u join app_user_roles aur on aur.user_id=u.id
+         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER')
+         group by u.id
+         order by coalesce(display_name, email), email`
+      )
+    });
+  })
+);
+
 app.post(
   "/api/events",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER"),
   route(async (req, res) => {
     const body = eventInput.parse(req.body);
+    const startsAt = new Date(body.startsAt);
+    const endsAt = new Date(body.endsAt);
+    if (endsAt <= startsAt) throw new ApiError("End date must be after start date", 422);
     await validateEventLeaderIds(body.eventLeaderUserIds);
+    for (const team of body.teams) await validateTeamLeaderIds(team.leaderUserIds);
+    const participatingCampusIds = [
+      ...new Set(body.participatingCampusIds.length ? body.participatingCampusIds : [body.campusId])
+    ];
+    await validateCampusIds([body.campusId, ...participatingCampusIds]);
     const eventId = await transaction(async (client) => {
       const event = (
         await client.query<{ id: string }>(
-          `insert into events(campus_id,name,description,starts_at,ends_at,address,latitude,longitude,event_leader_user_ids,status,created_by)
-       values($1,$2,$3,$4,$5,$6,$7,$8,$9,'DRAFT',$10) returning id`,
+          `insert into events(campus_id,name,description,starts_at,ends_at,address,latitude,longitude,event_leader_user_ids,status,created_by,
+             location_type,participating_campus_ids)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9,'DRAFT',$10,$11,$12) returning id`,
           [
             body.campusId,
             body.name,
             body.description,
-            body.startsAt,
-            body.endsAt,
+            startsAt.toISOString(),
+            endsAt.toISOString(),
             body.address,
             body.latitude,
             body.longitude,
             body.eventLeaderUserIds,
-            req.user!.id
+            req.user!.id,
+            body.locationType,
+            participatingCampusIds
           ]
         )
       ).rows[0]!;
+      for (const team of body.teams) {
+        await client.query(
+          `insert into event_groups(event_id,name,description,instructions,leader_user_ids,required_volunteer_count,
+             signup_policy,movement_policy,self_checkin_enabled,is_active)
+           values($1,$2,$3,$4,$5,$6,$7,$8,$9,true)`,
+          [
+            event.id,
+            team.name,
+            team.description,
+            team.instructions,
+            team.leaderUserIds,
+            team.requiredVolunteerCount,
+            team.signupPolicy,
+            team.movementPolicy,
+            team.selfCheckinEnabled
+          ]
+        );
+      }
       return event.id;
     });
     await audit(req.user!.id, "EVENT_CREATED", "event", eventId, body);
@@ -1023,21 +1416,31 @@ app.patch(
   route(async (req, res) => {
     const eventId = uuid.parse(req.params.eventId);
     const body = eventUpdateInput.parse(req.body);
+    const startsAt = new Date(body.startsAt);
+    const endsAt = new Date(body.endsAt);
+    if (endsAt <= startsAt) throw new ApiError("End date must be after start date", 422);
     await validateEventLeaderIds(body.eventLeaderUserIds);
+    const participatingCampusIds = [
+      ...new Set(body.participatingCampusIds.length ? body.participatingCampusIds : [body.campusId])
+    ];
+    await validateCampusIds([body.campusId, ...participatingCampusIds]);
     const event = await get<{ id: string }>(
       `update events set campus_id=$1,name=$2,description=$3,starts_at=$4,ends_at=$5,address=$6,
-       latitude=$7,longitude=$8,event_leader_user_ids=$9,status=$10 where id=$11 returning id`,
+       latitude=$7,longitude=$8,event_leader_user_ids=$9,status=$10,location_type=$11,participating_campus_ids=$12
+       where id=$13 returning id`,
       [
         body.campusId,
         body.name,
         body.description,
-        body.startsAt,
-        body.endsAt,
+        startsAt.toISOString(),
+        endsAt.toISOString(),
         body.address,
         body.latitude,
         body.longitude,
         body.eventLeaderUserIds,
         body.status,
+        body.locationType,
+        participatingCampusIds,
         eventId
       ]
     );
@@ -1062,6 +1465,101 @@ app.get(
          where e.status not in ('ACTIVE','DRAFT') and e.ends_at >= now() - interval '18 months'
          group by e.id,c.name
          order by e.starts_at desc`
+      )
+    );
+  })
+);
+
+app.get(
+  "/api/administration/audit-logs",
+  requireAuth,
+  requireRole("ADMIN"),
+  route(async (req, res) => {
+    const rawSearch = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 120) : "";
+    const prefix = rawSearch.match(/^([a-z]+):\s*(.+)$/i);
+    const allowedPrefixes = new Set(["date", "user", "action", "module", "target", "details"]);
+    const searchColumn = prefix && allowedPrefixes.has(prefix[1]!.toLowerCase()) ? prefix[1]!.toLowerCase() : null;
+    const searchValue = searchColumn ? prefix![2]!.trim() : rawSearch;
+    const searchPattern = searchValue
+      ? searchValue.includes("*")
+        ? searchValue.replace(/[%_]/g, "\\$&").replace(/\*/g, "%") || "%"
+        : `%${searchValue.replace(/[%_]/g, "\\$&")}%`
+      : null;
+    res.json(
+      await all(
+        `select id, actor_user_id, actor_name, actor_email, action, module, entity_type, entity_id, details,
+          ip_address, entity_name, occurred_at
+         from (
+         select al.id, al.actor_user_id, coalesce(u.display_name, u.email, 'System') actor_name,
+          u.email actor_email, al.action, al.module, al.entity_type, al.entity_id, al.details, al.ip_address,
+          coalesce(
+            case when al.entity_type='event' then ev.name end,
+            case when al.entity_type='event_group' then eg.name end,
+            case when al.entity_type='assignment' then concat_ws(' - ', ae.name, aeg.name) end,
+            case when al.entity_type='volunteer' then concat_ws(' ', vp.first_name, nullif(vp.middle_name, ''), vp.last_name) end,
+            case when al.entity_type='app_user' then coalesce(au.display_name, au.email) end,
+            case when al.entity_type='campus' then ca.name end,
+            case when al.entity_type='ministry' then mi.name end,
+            case when al.entity_type='ministry_role' then mr.name end,
+            case when al.entity_type='role' then ro.name end,
+            case when al.entity_type='email_template' then emt.name end,
+            case when al.entity_type='event_template' then evt.name end,
+            case when al.entity_type='broadcast' then br.subject end,
+            case when al.entity_type='task' then ta.title end,
+            case when al.entity_type='conversation' then ce.name end
+          ) entity_name,
+          concat_ws(' ',
+            to_char(al.occurred_at at time zone 'America/Chicago', 'Mon FMDD YYYY'),
+            to_char(al.occurred_at at time zone 'America/Chicago', 'Month FMDD YYYY'),
+            to_char(al.occurred_at at time zone 'America/Chicago', 'YYYY-MM-DD'),
+            to_char(al.occurred_at at time zone 'America/Chicago', 'HH12:MI AM')
+          ) occurred_at_search,
+          al.occurred_at
+         from audit_logs al
+         left join app_users u on u.id=al.actor_user_id
+         left join events ev on al.entity_type='event' and ev.id=al.entity_id
+         left join event_groups eg on al.entity_type='event_group' and eg.id=al.entity_id
+         left join assignments ass on al.entity_type='assignment' and ass.id=al.entity_id
+         left join event_groups aeg on aeg.id=ass.event_group_id
+         left join events ae on ae.id=aeg.event_id
+         left join volunteer_profiles vp on al.entity_type='volunteer' and vp.id=al.entity_id
+         left join app_users au on al.entity_type='app_user' and au.id=al.entity_id
+         left join campuses ca on al.entity_type='campus' and ca.id=al.entity_id
+         left join ministries mi on al.entity_type='ministry' and mi.id=al.entity_id
+         left join ministry_roles mr on al.entity_type='ministry_role' and mr.id=al.entity_id
+         left join roles ro on al.entity_type='role' and ro.code=al.details->>'code'
+         left join email_templates emt on al.entity_type='email_template' and emt.id=al.entity_id
+         left join event_templates evt on al.entity_type='event_template' and evt.id=al.entity_id
+         left join broadcasts br on al.entity_type='broadcast' and br.id=al.entity_id
+         left join tasks ta on al.entity_type='task' and ta.id=al.entity_id
+         left join conversations co on al.entity_type='conversation' and co.id=al.entity_id
+         left join events ce on ce.id=co.event_id
+         ) audit
+         where ($1::text is null and $2::text is null)
+           or ($1::text is null and (
+             action ilike $2 escape '\\'
+             or module ilike $2 escape '\\'
+             or entity_type ilike $2 escape '\\'
+             or actor_name ilike $2 escape '\\'
+             or coalesce(actor_email, '') ilike $2 escape '\\'
+             or coalesce(entity_name, '') ilike $2 escape '\\'
+             or coalesce(entity_id::text, '') ilike $2 escape '\\'
+             or occurred_at_search ilike $2 escape '\\'
+             or details::text ilike $2 escape '\\'
+           ))
+           or ($1='date' and occurred_at_search ilike $2 escape '\\')
+           or ($1='user' and (actor_name ilike $2 escape '\\' or coalesce(actor_email, '') ilike $2 escape '\\'))
+           or ($1='action' and action ilike $2 escape '\\')
+           or ($1='module' and module ilike $2 escape '\\')
+           or ($1='target' and (
+             coalesce(entity_name, '') ilike $2 escape '\\'
+             or entity_type ilike $2 escape '\\'
+             or coalesce(entity_id::text, '') ilike $2 escape '\\'
+           ))
+           or ($1='details' and details::text ilike $2 escape '\\')
+         order by occurred_at desc
+         limit 250`,
+        [searchColumn, searchPattern]
       )
     );
   })
@@ -1454,7 +1952,7 @@ app.get(
 app.post(
   "/api/broadcasts",
   requireAuth,
-  requireRole("ADMIN", "EVENT_LEADER"),
+  requireRole("ADMIN", "EVENT_LEADER", "TEAM_LEADER"),
   route(async (req, res) => {
     const body = z
       .object({
@@ -1487,12 +1985,11 @@ app.post(
     if (!isAdmin && !isEventLeader && !leadsEverySelectedTeam)
       throw new ApiError("You can only broadcast to events or event teams you lead", 403);
     if (body.emailTemplateId) {
-      const template = await get<{ created_by: string }>(
-        "select created_by from email_templates where id=$1 and is_active",
+      const template = await get<{ id: string }>(
+        "select id from email_templates where id=$1 and is_active",
         [body.emailTemplateId]
       );
-      if (!template || (!isAdmin && template.created_by !== req.user!.id))
-        throw new ApiError("The selected email template is not available", 422);
+      if (!template) throw new ApiError("The selected email template is not available", 422);
     }
     const item = await get<{ id: string }>(
       `insert into broadcasts(sender_id,event_id,email_template_id,subject,message,channels,audience_filter,status)
@@ -1926,7 +2423,7 @@ app.post(
 app.get(
   "/api/broadcasts",
   requireAuth,
-  requireRole("ADMIN", "EVENT_LEADER"),
+  requireRole("ADMIN", "EVENT_LEADER", "TEAM_LEADER"),
   route(async (req, res) => {
     res.json(
       await all(

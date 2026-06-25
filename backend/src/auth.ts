@@ -1,22 +1,10 @@
-import { readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
 import type { NextFunction, Response } from "express";
-import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { all, get } from "./db.js";
+import { initializeFirebaseAdmin } from "./firebase-admin.js";
 import type { AuthedRequest, AuthUser, UserRole } from "./types.js";
 
-function firebaseApp() {
-  if (getApps().length) return getApps()[0]!;
-  const configuredPath = process.env.GOOGLE_APPLICATION_CREDENTIALS ?? process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-  if (!configuredPath) return initializeApp({ credential: applicationDefault() });
-  const root = resolve(import.meta.dirname, "../..");
-  const path = isAbsolute(configuredPath) ? configuredPath : resolve(root, configuredPath);
-  const serviceAccount = JSON.parse(readFileSync(path, "utf8"));
-  return initializeApp({ credential: cert(serviceAccount), projectId: serviceAccount.project_id });
-}
-
-const firebaseAuth = getAuth(firebaseApp());
+const firebaseAuth = getAuth(initializeFirebaseAdmin());
 
 export async function domainUser(firebaseUid: string): Promise<AuthUser | undefined> {
   const user = await get<{ id: string; auth_uid: string; email: string; roles: UserRole[]; volunteer_id?: string }>(

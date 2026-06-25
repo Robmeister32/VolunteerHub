@@ -27,6 +27,10 @@ Run the files in order using the Supabase SQL Editor:
 14. `014_email_templates.sql`
 15. `015_remove_email_template_ministry.sql`
 16. `016_broadcast_audience.sql`
+17. `017_event_templates.sql`
+18. `018_user_home_campuses.sql`
+19. `019_event_participating_campuses.sql`
+20. `020_audit_log_modules.sql`
 
 The migrations create a private `volunteerhub` schema. Do not add it to Supabase's **Exposed schemas** list. The FastAPI service should connect directly to Postgres using a dedicated database role and perform authorization after verifying Firebase ID tokens.
 
@@ -62,15 +66,16 @@ FastAPI should generate short-lived signed URLs only after checking the caller's
 
 ## Important Tables
 
-- `app_users`, `roles`, `app_user_roles`: Firebase identities and assignable system roles
+- `app_users`, `user_home_campuses`, `roles`, `app_user_roles`: Firebase identities, home-campus preferences, and assignable system roles
 - `volunteer_profiles`, `households`, `guardian_authorizations`: people and families
 - `ministries`, `ministry_roles`, `leader_ministries`: organizational authorization
 - `requirement_definitions`, `role_requirements`, `volunteer_requirement_records`: compliance and training
-- `events`, `event_groups`, `assignments`, `assignment_change_requests`, `attendance`: scheduling
+- `events`, `event_groups`, `assignments`, `assignment_change_requests`, `attendance`: scheduling, event locations, and participating campus targeting
 - `broadcasts`, `broadcast_deliveries`, `conversations`, `messages`, `outbox_jobs`: communication and provider work
 - `tasks`, `task_recipients`, `task_claims`: event-team operational requests and multi-volunteer claims
 - `email_templates`: reusable email content with dynamic variables
-- `audit_logs`: immutable application audit events
+- `event_templates`: reusable event and event-team setups for later scheduling
+- `audit_logs`: immutable application audit events with searchable module/action metadata
 
 ## Important Views
 

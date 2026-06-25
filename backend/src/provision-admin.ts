@@ -1,18 +1,11 @@
-import { readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
-import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { pool } from "./db.js";
+import { initializeFirebaseAdmin } from "./firebase-admin.js";
 
 const email = process.argv[2]?.toLowerCase();
 if (!email) throw new Error("Usage: npm run provision:admin -w backend -- admin@example.org");
 
-const configuredPath = process.env.GOOGLE_APPLICATION_CREDENTIALS ?? process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-if (!configuredPath) throw new Error("GOOGLE_APPLICATION_CREDENTIALS is required");
-const root = resolve(import.meta.dirname, "../..");
-const path = isAbsolute(configuredPath) ? configuredPath : resolve(root, configuredPath);
-const serviceAccount = JSON.parse(readFileSync(path, "utf8"));
-if (!getApps().length) initializeApp({ credential: cert(serviceAccount), projectId: serviceAccount.project_id });
+initializeFirebaseAdmin();
 
 const firebaseUser = await getAuth().getUserByEmail(email);
 await pool.query(

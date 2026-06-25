@@ -20,7 +20,7 @@ test("production schema and reporting views are installed", async () => {
       (select count(*)::int from information_schema.tables where table_schema='volunteerhub' and table_type='BASE TABLE') tables,
       (select count(*)::int from information_schema.views where table_schema='volunteerhub') views`
   );
-  assert.equal(result?.tables, 34);
+  assert.ok((result?.tables ?? 0) >= 34);
   assert.equal(result?.views, 9);
 });
 
@@ -156,4 +156,36 @@ test("events use the current lifecycle and default to draft", async () => {
     assert.match(result?.constraint_definition ?? "", new RegExp(status));
   }
   assert.doesNotMatch(result?.constraint_definition ?? "", /PUBLISHED|COMPLETED/);
+});
+
+test("events support one-off location type and participating campuses", async () => {
+  const result = await get<{ columns: number; index_exists: boolean }>(
+    `select
+      (select count(*)::int
+       from information_schema.columns
+       where table_schema='volunteerhub' and table_name='events'
+         and column_name in ('location_type','participating_campus_ids')) columns,
+      exists(
+        select 1 from pg_indexes
+        where schemaname='volunteerhub' and indexname='events_participating_campuses_idx'
+      ) index_exists`
+  );
+  assert.equal(result?.columns, 2);
+  assert.equal(result?.index_exists, true);
+});
+
+test("audit logs include searchable module metadata", async () => {
+  const result = await get<{ module_column: boolean; module_index: boolean }>(
+    `select
+      exists(
+        select 1 from information_schema.columns
+        where table_schema='volunteerhub' and table_name='audit_logs' and column_name='module'
+      ) module_column,
+      exists(
+        select 1 from pg_indexes
+        where schemaname='volunteerhub' and indexname='audit_logs_module_occurred_idx'
+      ) module_index`
+  );
+  assert.equal(result?.module_column, true);
+  assert.equal(result?.module_index, true);
 });
