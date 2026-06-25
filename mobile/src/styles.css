@@ -2557,6 +2557,13 @@ form.audit-search {
   display: flex;
   gap: 6px;
 }
+.campus-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-left: auto;
+}
 .campus-actions .secondary {
   padding: 7px 9px;
 }
@@ -3178,8 +3185,15 @@ form.audit-search {
     grid-column: 2 / 4;
     grid-template-columns: 1fr;
   }
-  .campus-actions {
+  .campus-row-controls {
     width: 100%;
+    margin-left: 0;
     padding-left: 54px;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .campus-actions {
+    width: auto;
+    padding-left: 0;
   }
 }

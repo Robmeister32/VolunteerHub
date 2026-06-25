@@ -4742,16 +4742,18 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
                   {campus.address_line_1}, {campus.city}, {campus.region} {campus.postal_code}
                 </small>
               </span>
-              <span className={`status ${campus.is_active ? "approved" : "inactive"}`}>
-                {campus.is_active ? "Active" : "Inactive"}
-              </span>
-              <div className="campus-actions">
-                <button className="secondary" onClick={() => openForm(campus)}>
-                  <Pencil size={15} /> Edit
-                </button>
-                <button className="secondary" onClick={() => toggleActive(campus)}>
-                  {campus.is_active ? "Deactivate" : "Activate"}
-                </button>
+              <div className="campus-row-controls">
+                <span className={`status ${campus.is_active ? "approved" : "inactive"}`}>
+                  {campus.is_active ? "Active" : "Inactive"}
+                </span>
+                <div className="campus-actions">
+                  <button className="secondary" onClick={() => openForm(campus)}>
+                    <Pencil size={15} /> Edit
+                  </button>
+                  <button className="secondary" onClick={() => toggleActive(campus)}>
+                    {campus.is_active ? "Deactivate" : "Activate"}
+                  </button>
+                </div>
               </div>
             </div>
           ))}
