@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .vercel/
+*.log
+*.tsbuildinfo
 *.db
 *.db-shm
 *.db-wal
