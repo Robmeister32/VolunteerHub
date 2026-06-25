@@ -1013,7 +1013,7 @@ function Events({
             : "Track staffing, approvals, and attendance."
         }
       />
-      <div className="filter-bar">
+      <div className="filter-bar event-filter-bar">
         <div className="search active">
           <Search size={17} />
           <label className="sr-only" htmlFor="event-search">

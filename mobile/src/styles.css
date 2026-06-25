@@ -1284,6 +1284,9 @@ main {
 .filter-bar .search {
   max-width: 420px;
 }
+.event-filter-bar .search {
+  min-width: 240px;
+}
 .location-filter {
   display: inline-flex;
   flex: none;
@@ -3044,6 +3047,10 @@ form.audit-search {
     width: 100%;
     max-width: none;
     display: flex;
+  }
+  .event-filter-bar .search {
+    flex: 0 0 100%;
+    min-width: 0;
   }
   .commitment-row {
     align-items: flex-start;
