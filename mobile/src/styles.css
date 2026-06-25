@@ -3062,6 +3062,13 @@ form.audit-search {
     order: 3;
     margin-left: auto;
   }
+  .datetime-control {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .datetime-date {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
   .commitment-row {
     align-items: flex-start;
     flex-wrap: wrap;
