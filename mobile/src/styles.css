@@ -1287,6 +1287,9 @@ main {
 .event-filter-bar .search {
   min-width: 240px;
 }
+.event-filter-bar > .primary {
+  flex: none;
+}
 .location-filter {
   display: inline-flex;
   flex: none;
@@ -3051,6 +3054,13 @@ form.audit-search {
   .event-filter-bar .search {
     flex: 0 0 100%;
     min-width: 0;
+  }
+  .event-filter-bar > .primary {
+    order: 2;
+  }
+  .event-filter-bar .location-filter {
+    order: 3;
+    margin-left: auto;
   }
   .commitment-row {
     align-items: flex-start;
