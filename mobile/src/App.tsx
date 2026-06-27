@@ -5430,6 +5430,53 @@ function RoleAssignmentMaintenance({ notify, close }: { notify: (m: string) => v
     }
   };
 
+  if (editing) {
+    return (
+      <>
+        <Breadcrumbs
+          items={[
+            { label: "Administration", onClick: close },
+            { label: "Role Assignments", onClick: () => setEditing(null) },
+            { label: editing.display_name || editing.email }
+          ]}
+        />
+        <PageTitle
+          eyebrow="Administration"
+          title="Assign roles"
+          description="Select every application role this user should hold."
+        />
+        <Card title="User roles">
+          <form className="campus-form campus-form-page" key={editing.id} onSubmit={save}>
+            <MaintenanceFormTitle
+              icon={<UserCheck size={19} />}
+              title={editing.display_name || editing.email}
+              description={`${editing.email} · ${editing.status}`}
+            />
+            <div className="role-assignment-options">
+              {roles
+                .filter((role) => role.is_active || editing.roles.includes(role.code))
+                .map((role) => (
+                  <label className="check-label" key={role.code}>
+                    <input
+                      name="roles"
+                      type="checkbox"
+                      value={role.code}
+                      defaultChecked={editing.roles.includes(role.code)}
+                    />
+                    <span>
+                      <strong>{role.name}</strong>
+                      <small>{role.description || role.code}</small>
+                    </span>
+                  </label>
+                ))}
+            </div>
+            <MaintenanceFormActions editing cancel={() => setEditing(null)} />
+          </form>
+        </Card>
+      </>
+    );
+  }
+
   return (
     <>
       <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Role Assignments" }]} />
@@ -5454,55 +5501,25 @@ function RoleAssignmentMaintenance({ notify, close }: { notify: (m: string) => v
             Showing {filteredUsers.length} of {users.length} users
           </small>
         </div>
-        <div className={editing ? "administration-grid" : ""}>
-          <div className="table campus-table">
-            {filteredUsers.map((user) => (
-              <div className="table-row" key={user.id}>
-                <span className="attention-icon blue">
-                  <UserCheck size={19} />
-                </span>
-                <span className="grow">
-                  <strong>{user.display_name || user.email}</strong>
-                  <small>
-                    {user.email} · {user.roles.join(", ") || "No roles"}
-                  </small>
-                </span>
-                <span className={`status ${user.status === "ACTIVE" ? "approved" : "inactive"}`}>{user.status}</span>
-                <button className="secondary" onClick={() => setEditing(user)}>
-                  <Pencil size={15} /> Assign roles
-                </button>
-              </div>
-            ))}
-            {!filteredUsers.length && <Empty text="No users match your search." />}
-          </div>
-          {editing && (
-            <form className="campus-form" key={editing.id} onSubmit={save}>
-              <MaintenanceFormTitle
-                icon={<UserCheck size={19} />}
-                title={editing.display_name || editing.email}
-                description="Select every application role this user should hold."
-              />
-              <div className="role-assignment-options">
-                {roles
-                  .filter((role) => role.is_active || editing.roles.includes(role.code))
-                  .map((role) => (
-                    <label className="check-label" key={role.code}>
-                      <input
-                        name="roles"
-                        type="checkbox"
-                        value={role.code}
-                        defaultChecked={editing.roles.includes(role.code)}
-                      />
-                      <span>
-                        <strong>{role.name}</strong>
-                        <small>{role.description || role.code}</small>
-                      </span>
-                    </label>
-                  ))}
-              </div>
-              <MaintenanceFormActions editing cancel={() => setEditing(null)} />
-            </form>
-          )}
+        <div className="table campus-table">
+          {filteredUsers.map((user) => (
+            <div className="table-row" key={user.id}>
+              <span className="attention-icon blue">
+                <UserCheck size={19} />
+              </span>
+              <span className="grow">
+                <strong>{user.display_name || user.email}</strong>
+                <small>
+                  {user.email} · {user.roles.join(", ") || "No roles"}
+                </small>
+              </span>
+              <span className={`status ${user.status === "ACTIVE" ? "approved" : "inactive"}`}>{user.status}</span>
+              <button className="secondary" onClick={() => setEditing(user)}>
+                <Pencil size={15} /> Assign roles
+              </button>
+            </div>
+          ))}
+          {!filteredUsers.length && <Empty text="No users match your search." />}
         </div>
       </Card>
     </>
