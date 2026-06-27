@@ -20,6 +20,13 @@ create table if not exists ministry_campus_leads (
   primary key (ministry_id, campus_id)
 );
 
+insert into roles(code, name, description)
+values ('MINISTRY_HEAD', 'Ministry Head', 'Oversee ministry activities.')
+on conflict (code) do update
+set name = excluded.name,
+    description = excluded.description,
+    is_active = true;
+
 insert into user_ministry_memberships(user_id, ministry_id)
 select user_id, ministry_id
 from leader_ministries
@@ -50,12 +57,25 @@ where vp.app_user_id is not null
   and vre.status in ('PENDING', 'ELIGIBLE')
 on conflict do nothing;
 
-insert into ministry_campus_leads(ministry_id, campus_id, lead_user_id, assigned_by, assigned_at)
-select m.id, m.campus_id, lm.user_id, lm.assigned_by, lm.assigned_at
-from ministries m
-join leader_ministries lm on lm.ministry_id = m.id
-where m.campus_id is not null
-on conflict do nothing;
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'volunteerhub'
+      and table_name = 'ministries'
+      and column_name = 'campus_id'
+  ) then
+    execute $backfill$
+      insert into ministry_campus_leads(ministry_id, campus_id, lead_user_id, assigned_by, assigned_at)
+      select m.id, m.campus_id, lm.user_id, lm.assigned_by, lm.assigned_at
+      from ministries m
+      join leader_ministries lm on lm.ministry_id = m.id
+      where m.campus_id is not null
+      on conflict do nothing
+    $backfill$;
+  end if;
+end $$;
 
 insert into user_ministry_memberships(user_id, ministry_id)
 select lead_user_id, ministry_id

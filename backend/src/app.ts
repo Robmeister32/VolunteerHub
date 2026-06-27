@@ -2831,6 +2831,11 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
     });
   if (error instanceof ApiError) return res.status(error.statusCode).json({ error: error.message });
   if (error instanceof GeocodingError) return res.status(error.statusCode).json({ error: error.message });
+  if (["42P01", "42703"].includes(String((error as { code?: string }).code)))
+    return res.status(500).json({
+      error:
+        "Database schema is missing the latest ministry migration. Run database/021_ministry_membership_leads.sql in Supabase."
+    });
   if ((error as { code?: string }).code === "23505")
     return res.status(409).json({ error: "This record conflicts with an existing active record" });
   console.error(error);

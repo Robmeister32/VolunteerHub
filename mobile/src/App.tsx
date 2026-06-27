@@ -4045,7 +4045,7 @@ function Administration({
 
   useEffect(() => {
     if (!hasRole(session, "ADMIN")) return;
-    Promise.all([
+    Promise.allSettled([
       api<VolunteerDirectoryPerson[]>("/administration/volunteers"),
       api<AdminTaskItem[]>("/administration/tasks"),
       api<Campus[]>("/administration/campuses"),
@@ -4055,21 +4055,23 @@ function Administration({
       api<UserRoleAssignment[]>("/administration/role-assignments"),
       api<ArchivedEvent[]>("/administration/archived-events"),
       api<AuditLogItem[]>("/administration/audit-logs")
-    ])
-      .then(([volunteers, tasks, campuses, ministries, roles, systemRoles, assignments, archivedEvents, audit]) =>
-        setCounts({
-          volunteers: volunteers.length,
-          tasks: tasks.length,
-          campuses: campuses.length,
-          ministries: ministries.length,
-          roles: roles.length,
-          systemRoles: systemRoles.length,
-          assignments: assignments.length,
-          archivedEvents: archivedEvents.length,
-          audit: audit.length
-        })
-      )
-      .catch((error) => notify((error as Error).message));
+    ]).then((results) => {
+      const [volunteers, tasks, campuses, ministries, roles, systemRoles, assignments, archivedEvents, audit] =
+        results.map((result) => (result.status === "fulfilled" ? result.value : []));
+      setCounts({
+        volunteers: volunteers.length,
+        tasks: tasks.length,
+        campuses: campuses.length,
+        ministries: ministries.length,
+        roles: roles.length,
+        systemRoles: systemRoles.length,
+        assignments: assignments.length,
+        archivedEvents: archivedEvents.length,
+        audit: audit.length
+      });
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) notify((failed.reason as Error).message);
+    });
   }, []);
 
   if (!hasRole(session, "ADMIN"))
