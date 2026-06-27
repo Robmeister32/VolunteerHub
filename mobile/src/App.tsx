@@ -178,18 +178,25 @@ interface Campus {
 
 interface Ministry {
   id: string;
-  campus_id: string;
-  campus_name: string;
   name: string;
   description?: string;
+  ministry_head_user_id?: string;
+  ministry_head_name?: string;
+  campus_leads?: MinistryCampusLead[];
   is_active: boolean;
+}
+
+interface MinistryCampusLead {
+  campus_id: string;
+  campus_name: string;
+  lead_user_id?: string;
+  lead_name?: string;
 }
 
 interface MinistryRole {
   id: string;
   ministry_id: string;
   ministry_name: string;
-  campus_name: string;
   name: string;
   description?: string;
   minimum_age: number;
@@ -442,16 +449,20 @@ export function App() {
   if (!session) return <Login onLogin={enter} notice={notice} />;
 
   const nav =
-    hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER")
+    hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER") || session.ministryIds.length > 0
       ? ([
           ["serve", Home, "Home"],
           ["commitments", ClipboardCheck, "My Commitments"],
           ["tasks", ClipboardList, "My Tasks"],
           ["messages", MessageSquareText, "My Messages"],
-          ["events", CalendarDays, "Events"],
+          ...(hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER")
+            ? ([["events", CalendarDays, "Events"]] as const)
+            : []),
           ...(hasRole(session, "ADMIN") ? ([["applications", UserCheck, "Applications"]] as const) : []),
           ["tools", Wrench, "Tools"],
-          ...(hasRole(session, "ADMIN") ? ([["administration", Settings, "Administration"]] as const) : []),
+          ...(hasRole(session, "ADMIN") || session.ministryIds.length > 0
+            ? ([["administration", Settings, "Administration"]] as const)
+            : []),
           ["profile", Users, "Profile"]
         ] as const)
       : ([
@@ -544,7 +555,7 @@ export function App() {
           {view === "applications" && <Applications notify={setNotice} />}
           {view === "reports" && <Reports />}
           {view === "tools" && <Tools session={session} notify={setNotice} />}
-          {view === "administration" && hasRole(session, "ADMIN") && (
+          {view === "administration" && (hasRole(session, "ADMIN") || session.ministryIds.length > 0) && (
             <Administration key={administrationKey} session={session} navigate={setView} notify={setNotice} />
           )}
           {view === "profile" && <Profile notify={setNotice} />}
@@ -933,22 +944,17 @@ function Events({
     });
     return () => controller.abort();
   }, [load, notify]);
-  const visibleEvents = events.filter(
-    (event) => locationScope === "ALL" || eventMatchesHomeCampus(event, session)
-  );
+  const visibleEvents = events.filter((event) => locationScope === "ALL" || eventMatchesHomeCampus(event, session));
   const groupedEvents = [...visibleEvents]
     .sort((first, second) => new Date(first.starts_at).getTime() - new Date(second.starts_at).getTime())
-    .reduce<Array<{ key: string; label: string; items: EventItem[] }>>(
-    (groups, event) => {
+    .reduce<Array<{ key: string; label: string; items: EventItem[] }>>((groups, event) => {
       const date = new Date(event.starts_at);
       const key = `${date.getFullYear()}-${date.getMonth()}`;
       const current = groups.find((group) => group.key === key);
       if (current) current.items.push(event);
       else groups.push({ key, label: date.toLocaleString("en-US", { month: "long" }), items: [event] });
       return groups;
-    },
-    []
-    );
+    }, []);
   const signup = async (event: EventItem, eventGroupId: string, volunteerId?: string) => {
     try {
       const result = await api<{ status: string }>(`/event-groups/${eventGroupId}/signup`, {
@@ -1084,48 +1090,46 @@ function Events({
         ) : (
           <Empty text={eventSearch ? "No upcoming events match your search." : "There are no upcoming events."} />
         )
+      ) : groupedEvents.length ? (
+        <div className="serve-event-months">
+          {groupedEvents.map((group) => (
+            <section className="serve-event-month" key={group.key}>
+              <div className="serve-month-heading">
+                <h2>{group.label}</h2>
+                <span aria-hidden="true" />
+              </div>
+              <div className="events-grid">
+                {group.items.map((event) => (
+                  <EventCard
+                    key={event.id}
+                    event={event}
+                    session={session}
+                    serveMode={false}
+                    onOpen={() => {
+                      setEditSelected(false);
+                      setSelected(event);
+                    }}
+                    onEdit={() => {
+                      setEditSelected(true);
+                      setSelected(event);
+                    }}
+                    onManage={() => setManaging(event)}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       ) : (
-        groupedEvents.length ? (
-          <div className="serve-event-months">
-            {groupedEvents.map((group) => (
-              <section className="serve-event-month" key={group.key}>
-                <div className="serve-month-heading">
-                  <h2>{group.label}</h2>
-                  <span aria-hidden="true" />
-                </div>
-                <div className="events-grid">
-                  {group.items.map((event) => (
-                    <EventCard
-                      key={event.id}
-                      event={event}
-                      session={session}
-                      serveMode={false}
-                      onOpen={() => {
-                        setEditSelected(false);
-                        setSelected(event);
-                      }}
-                      onEdit={() => {
-                        setEditSelected(true);
-                        setSelected(event);
-                      }}
-                      onManage={() => setManaging(event)}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        ) : (
-          <Empty
-            text={
-              eventSearch
-                ? "No upcoming events match your search."
-                : locationScope === "MY_CAMPUS"
-                  ? "There are no upcoming events for your campus or off-site locations."
-                  : "There are no upcoming events."
-            }
-          />
-        )
+        <Empty
+          text={
+            eventSearch
+              ? "No upcoming events match your search."
+              : locationScope === "MY_CAMPUS"
+                ? "There are no upcoming events for your campus or off-site locations."
+                : "There are no upcoming events."
+          }
+        />
       )}
       {selected && (
         <EventDrawer
@@ -2540,11 +2544,10 @@ function Broadcasts({ session, notify, close }: { session: Session; notify: (m: 
     Promise.all([api<EventItem[]>("/events"), api<EmailTemplate[]>("/tools/email-templates")])
       .then(([eventRows, templateRows]) => {
         setEvents(
-          eventRows.filter(
-            (event) =>
-              usesEventTargets
-                ? hasRole(session, "ADMIN") || event.event_leader_user_ids.includes(session.id)
-                : event.groups.some((group) => group.leader_user_ids.includes(session.id))
+          eventRows.filter((event) =>
+            usesEventTargets
+              ? hasRole(session, "ADMIN") || event.event_leader_user_ids.includes(session.id)
+              : event.groups.some((group) => group.leader_user_ids.includes(session.id))
           )
         );
         setTemplates(templateRows.filter((template) => template.is_active));
@@ -2957,9 +2960,7 @@ function OneOffEventCreator({
 
   const newTeam = (): EventTemplateTeam & { localId: string } => ({
     localId:
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`,
+      typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
     name: "",
     description: "",
     instructions: "",
@@ -3051,10 +3052,7 @@ function OneOffEventCreator({
   return (
     <>
       <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Create event" }]} />
-      <PageTitle
-        eyebrow="Event"
-        title="Create Event"
-      />
+      <PageTitle eyebrow="Event" title="Create Event" />
       <form className="card template-event-create-form" onSubmit={submit}>
         <MaintenanceFormTitle
           icon={<MapPin />}
@@ -3226,7 +3224,11 @@ function OneOffEventCreator({
             ))}
             {!teams.length && <Empty text="No event teams have been added to this event." />}
           </div>
-          <button className="secondary full" type="button" onClick={() => setTeams((current) => [...current, newTeam()])}>
+          <button
+            className="secondary full"
+            type="button"
+            onClick={() => setTeams((current) => [...current, newTeam()])}
+          >
             <Plus size={16} /> Add event team
           </button>
         </section>
@@ -4042,6 +4044,7 @@ function Administration({
   });
 
   useEffect(() => {
+    if (!hasRole(session, "ADMIN")) return;
     Promise.all([
       api<VolunteerDirectoryPerson[]>("/administration/volunteers"),
       api<AdminTaskItem[]>("/administration/tasks"),
@@ -4069,11 +4072,15 @@ function Administration({
       .catch((error) => notify((error as Error).message));
   }, []);
 
+  if (!hasRole(session, "ADMIN"))
+    return <MinistryMaintenance session={session} notify={notify} close={() => navigate("serve")} />;
+
   if (section === "volunteers")
     return <VolunteerDirectoryMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "tasks") return <TaskAssignmentMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "campuses") return <CampusMaintenance notify={notify} close={() => setSection("home")} />;
-  if (section === "ministries") return <MinistryMaintenance notify={notify} close={() => setSection("home")} />;
+  if (section === "ministries")
+    return <MinistryMaintenance session={session} notify={notify} close={() => setSection("home")} />;
   if (section === "roles") return <RoleMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "system-roles") return <SystemRoleMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "role-assignments")
@@ -4120,7 +4127,7 @@ function Administration({
         <MaintenanceCard
           icon={<Users />}
           title="Ministry"
-          description="Maintain ministries and assign each one to its home campus."
+          description="Maintain ministries, ministry heads, and campus lead assignments."
           count={counts.ministries}
           onClick={() => setSection("ministries")}
         />
@@ -4771,9 +4778,7 @@ function AuditLogMaintenance({ notify, close }: { notify: (m: string) => void; c
   const load = useCallback(
     () =>
       api<AuditLogItem[]>(
-        `/administration/audit-logs${
-          submittedSearch.trim() ? `?q=${encodeURIComponent(submittedSearch.trim())}` : ""
-        }`
+        `/administration/audit-logs${submittedSearch.trim() ? `?q=${encodeURIComponent(submittedSearch.trim())}` : ""}`
       )
         .then(setLogs)
         .catch((error) => notify((error as Error).message)),
@@ -4854,17 +4859,32 @@ function AuditLogMaintenance({ notify, close }: { notify: (m: string) => void; c
   );
 }
 
-function MinistryMaintenance({ notify, close }: { notify: (m: string) => void; close: () => void }) {
+function MinistryMaintenance({
+  session,
+  notify,
+  close
+}: {
+  session: Session;
+  notify: (m: string) => void;
+  close: () => void;
+}) {
   const [ministries, setMinistries] = useState<Ministry[]>([]);
-  const [campuses, setCampuses] = useState<Campus[]>([]);
+  const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
+  const [leaders, setLeaders] = useState<EventLeader[]>([]);
   const [editing, setEditing] = useState<Ministry | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const canCreate = hasRole(session, "ADMIN");
 
   const load = () =>
-    Promise.all([api<Ministry[]>("/administration/ministries"), api<Campus[]>("/administration/campuses")])
-      .then(([ministryRows, campusRows]) => {
+    Promise.all([
+      api<Ministry[]>("/administration/ministries"),
+      api<{ campuses: CampusCatalogItem[] }>("/catalog"),
+      api<EventLeader[]>("/administration/ministry-leader-candidates")
+    ])
+      .then(([ministryRows, catalog, leaderRows]) => {
         setMinistries(ministryRows);
-        setCampuses(campusRows);
+        setCampuses(catalog.campuses);
+        setLeaders(leaderRows);
       })
       .catch((error) => notify((error as Error).message));
 
@@ -4873,20 +4893,40 @@ function MinistryMaintenance({ notify, close }: { notify: (m: string) => void; c
   }, []);
 
   const payloadFor = (ministry: Ministry) => ({
-    campusId: ministry.campus_id,
     name: ministry.name,
     description: ministry.description || null,
+    ministryHeadUserId: ministry.ministry_head_user_id || null,
+    campusLeads: (ministry.campus_leads ?? []).map((lead) => ({
+      campusId: lead.campus_id,
+      leadUserId: lead.lead_user_id || null
+    })),
     isActive: ministry.is_active
   });
+
+  const leaderLabel = (leader: EventLeader) => leader.display_name || leader.email;
+  const campusLeadsFor = (ministry?: Ministry | null) =>
+    campuses.map((campus) => {
+      const lead = ministry?.campus_leads?.find((item) => item.campus_id === campus.id);
+      return {
+        campusId: campus.id,
+        campusName: campus.name,
+        leadUserId: lead?.lead_user_id ?? ""
+      };
+    });
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData);
     const body = {
-      campusId: data.campusId,
       name: data.name,
       description: String(data.description ?? "").trim() || null,
+      ministryHeadUserId: String(data.ministryHeadUserId ?? "").trim() || null,
+      campusLeads: campuses.map((campus) => ({
+        campusId: campus.id,
+        leadUserId: String(formData.get(`campusLead-${campus.id}`) ?? "").trim() || null
+      })),
       isActive: data.isActive === "on"
     };
     try {
@@ -4916,25 +4956,7 @@ function MinistryMaintenance({ notify, close }: { notify: (m: string) => void; c
     }
   };
 
-  const ministryTeams = ministries
-    .reduce<Array<{ campusId: string; campusName: string; ministries: Ministry[] }>>((groups, ministry) => {
-      const group = groups.find((item) => item.campusId === ministry.campus_id);
-      if (group) {
-        group.ministries.push(ministry);
-      } else {
-        groups.push({
-          campusId: ministry.campus_id,
-          campusName: ministry.campus_name,
-          ministries: [ministry]
-        });
-      }
-      return groups;
-    }, [])
-    .sort((left, right) => left.campusName.localeCompare(right.campusName));
-
-  ministryTeams.forEach((group) => {
-    group.ministries.sort((left, right) => left.name.localeCompare(right.name));
-  });
+  const sortedMinistries = [...ministries].sort((left, right) => left.name.localeCompare(right.name));
 
   return (
     <>
@@ -4942,68 +4964,60 @@ function MinistryMaintenance({ notify, close }: { notify: (m: string) => void; c
       <PageTitle
         eyebrow="Administration"
         title="Ministry maintenance"
-        description="Maintain ministries and assign each one to its home campus."
+        description="Maintain ministries, ministry heads, and campus lead assignments."
       />
       <Card
         title="Ministry"
         action={
-          <button
-            onClick={() => {
-              setEditing(null);
-              setFormOpen(true);
-            }}
-          >
-            <Plus size={16} /> Add ministry
-          </button>
+          canCreate && (
+            <button
+              onClick={() => {
+                setEditing(null);
+                setFormOpen(true);
+              }}
+            >
+              <Plus size={16} /> Add ministry
+            </button>
+          )
         }
       >
         <div className={formOpen ? "administration-grid" : ""}>
-          <div className="ministry-groups">
-            {ministryTeams.map((group) => (
-              <section className="ministry-group" key={group.campusId}>
-                <div className="ministry-group-header">
-                  <span className="attention-icon">
-                    <Building2 size={18} />
+          <div className="table campus-table">
+            {sortedMinistries.map((ministry) => {
+              const leadCount = (ministry.campus_leads ?? []).filter((lead) => lead.lead_user_id).length;
+              return (
+                <div className="table-row" key={ministry.id}>
+                  <span className="attention-icon blue">
+                    <Users size={19} />
                   </span>
                   <span className="grow">
-                    <strong>{group.campusName}</strong>
+                    <strong>{ministry.name}</strong>
+                    <small>{ministry.description || "No description"}</small>
                     <small>
-                      {group.ministries.length} {group.ministries.length === 1 ? "ministry" : "ministries"}
+                      Ministry Head: {ministry.ministry_head_name || "Unassigned"} · Campus leads: {leadCount}/
+                      {campuses.length}
                     </small>
                   </span>
+                  <span className={`status ${ministry.is_active ? "approved" : "inactive"}`}>
+                    {ministry.is_active ? "Active" : "Inactive"}
+                  </span>
+                  <div className="campus-actions">
+                    <button
+                      className="secondary"
+                      onClick={() => {
+                        setEditing(ministry);
+                        setFormOpen(true);
+                      }}
+                    >
+                      <Pencil size={15} /> Edit
+                    </button>
+                    <button className="secondary" onClick={() => void toggleActive(ministry)}>
+                      {ministry.is_active ? "Deactivate" : "Activate"}
+                    </button>
+                  </div>
                 </div>
-                <div className="table campus-table">
-                  {group.ministries.map((ministry) => (
-                    <div className="table-row" key={ministry.id}>
-                      <span className="attention-icon blue">
-                        <Users size={19} />
-                      </span>
-                      <span className="grow">
-                        <strong>{ministry.name}</strong>
-                        <small>{ministry.description || "No description"}</small>
-                      </span>
-                      <span className={`status ${ministry.is_active ? "approved" : "inactive"}`}>
-                        {ministry.is_active ? "Active" : "Inactive"}
-                      </span>
-                      <div className="campus-actions">
-                        <button
-                          className="secondary"
-                          onClick={() => {
-                            setEditing(ministry);
-                            setFormOpen(true);
-                          }}
-                        >
-                          <Pencil size={15} /> Edit
-                        </button>
-                        <button className="secondary" onClick={() => void toggleActive(ministry)}>
-                          {ministry.is_active ? "Deactivate" : "Activate"}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ))}
+              );
+            })}
             {!ministries.length && <Empty text="No ministries have been configured." />}
           </div>
           {formOpen && (
@@ -5011,26 +5025,46 @@ function MinistryMaintenance({ notify, close }: { notify: (m: string) => void; c
               <MaintenanceFormTitle
                 icon={<Users size={19} />}
                 title={editing ? "Edit ministry" : "Add ministry"}
-                description={editing ? "Update this ministry's details." : "Create a ministry for a campus."}
+                description={editing ? "Update this ministry's details and leaders." : "Create a ministry."}
               />
-              <label>
-                Campus
-                <select name="campusId" defaultValue={editing?.campus_id} required>
-                  <option value="">Select a campus</option>
-                  {campuses
-                    .filter((campus) => campus.is_active || campus.id === editing?.campus_id)
-                    .map((campus) => (
-                      <option key={campus.id} value={campus.id}>
-                        {campus.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
               <Field name="name" label="Ministry name" defaultValue={editing?.name} />
               <label>
                 Description
                 <textarea name="description" rows={4} defaultValue={editing?.description} />
               </label>
+              <label>
+                Ministry Head
+                <select name="ministryHeadUserId" defaultValue={editing?.ministry_head_user_id ?? ""}>
+                  <option value="">Unassigned</option>
+                  {leaders.map((leader) => (
+                    <option key={leader.id} value={leader.id}>
+                      {leaderLabel(leader)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="campus-lead-list">
+                <span className="leader-selector-title">Campus leads</span>
+                {campusLeadsFor(editing).map((lead) => (
+                  <label className="campus-lead-row" key={lead.campusId}>
+                    <span>
+                      <Building2 size={15} />
+                      {lead.campusName}
+                    </span>
+                    <select name={`campusLead-${lead.campusId}`} defaultValue={lead.leadUserId}>
+                      <option value="">Unassigned</option>
+                      {leaders.map((leader) => (
+                        <option key={leader.id} value={leader.id}>
+                          {leaderLabel(leader)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+                {!campuses.length && (
+                  <small className="form-help">Create campuses before assigning campus leads.</small>
+                )}
+              </div>
               <ActiveCheckbox label="Ministry is active" checked={editing?.is_active ?? true} />
               <MaintenanceFormActions
                 editing={Boolean(editing)}
@@ -5145,7 +5179,7 @@ function RoleMaintenance({ notify, close }: { notify: (m: string) => void; close
                 <span className="grow">
                   <strong>{role.name}</strong>
                   <small>
-                    {role.campus_name} · {role.ministry_name} · Minimum age {role.minimum_age}
+                    {role.ministry_name} · Minimum age {role.minimum_age}
                     {role.maximum_age === null || role.maximum_age === undefined ? "" : `–${role.maximum_age}`}
                   </small>
                 </span>
@@ -5185,7 +5219,7 @@ function RoleMaintenance({ notify, close }: { notify: (m: string) => void; close
                     .filter((ministry) => ministry.is_active || ministry.id === editing?.ministry_id)
                     .map((ministry) => (
                       <option key={ministry.id} value={ministry.id}>
-                        {ministry.campus_name} · {ministry.name}
+                        {ministry.name}
                       </option>
                     ))}
                 </select>
@@ -5478,13 +5512,17 @@ function RoleAssignmentMaintenance({ notify, close }: { notify: (m: string) => v
 function Profile({ notify }: { notify: (m: string) => void }) {
   const [profile, setProfile] = useState<Record<string, unknown>>({});
   const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
+  const [ministries, setMinistries] = useState<Ministry[]>([]);
   const [editing, setEditing] = useState(false);
   const [linkingFamily, setLinkingFamily] = useState(false);
   const load = () => api<Record<string, unknown>>("/me").then(setProfile);
   useEffect(() => {
     void load();
-    api<{ campuses: CampusCatalogItem[] }>("/catalog")
-      .then((catalog) => setCampuses(catalog.campuses))
+    api<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>("/catalog")
+      .then((catalog) => {
+        setCampuses(catalog.campuses);
+        setMinistries(catalog.ministries);
+      })
       .catch((error) => notify((error as Error).message));
   }, []);
   const household = (profile.household ?? []) as Array<Record<string, string | number>>;
@@ -5515,7 +5553,8 @@ function Profile({ notify }: { notify: (m: string) => void }) {
         };
     const payloadWithHomeCampuses = {
       ...payload,
-      homeCampusIds: formData.getAll("homeCampusIds").map(String)
+      homeCampusIds: formData.getAll("homeCampusIds").map(String),
+      ministryMembershipIds: formData.getAll("ministryMembershipIds").map(String)
     };
     try {
       await api("/me", {
@@ -5581,7 +5620,8 @@ function Profile({ notify }: { notify: (m: string) => void }) {
               </span>
             ) : (
               <span>
-                <ShieldCheck /> Access <strong>{((profile.roles as string[]) ?? []).map(formatRoleName).join(", ")}</strong>
+                <ShieldCheck /> Access{" "}
+                <strong>{((profile.roles as string[]) ?? []).map(formatRoleName).join(", ")}</strong>
               </span>
             )}
             <span>
@@ -5589,6 +5629,10 @@ function Profile({ notify }: { notify: (m: string) => void }) {
             </span>
             <span>
               <Building2 /> Home campus <strong>{String(profile.home_campus_name ?? "Campus not assigned")}</strong>
+            </span>
+            <span>
+              <Users /> Ministries{" "}
+              <strong>{((profile.ministry_membership_ids as string[]) ?? []).length || "None"}</strong>
             </span>
           </div>
           {editing && (
@@ -5625,9 +5669,10 @@ function Profile({ notify }: { notify: (m: string) => void }) {
                 </div>
               )}
               <Field name="phone" label="Mobile phone" type="tel" defaultValue={String(profile.phone ?? "")} />
-              <CampusBubbleSelector
-                campuses={campuses}
-                selectedIds={(profile.home_campus_ids as string[]) ?? []}
+              <CampusBubbleSelector campuses={campuses} selectedIds={(profile.home_campus_ids as string[]) ?? []} />
+              <MinistryBubbleSelector
+                ministries={ministries}
+                selectedIds={(profile.ministry_membership_ids as string[]) ?? []}
               />
               {hasVolunteerProfile && (
                 <>
@@ -6070,6 +6115,70 @@ function CampusBubbleSelector({
     </div>
   );
 }
+function MinistryBubbleSelector({
+  ministries,
+  selectedIds,
+  inputName = "ministryMembershipIds",
+  title = "Ministry membership",
+  emptyLabel = "Add ministry",
+  addAnotherLabel = "Add another ministry",
+  helpText = "Select each ministry you serve with or want to stay connected to."
+}: {
+  ministries: Ministry[];
+  selectedIds: string[];
+  inputName?: string;
+  title?: string;
+  emptyLabel?: string;
+  addAnotherLabel?: string;
+  helpText?: string;
+}) {
+  const [selected, setSelected] = useState(selectedIds);
+  const [ministryId, setMinistryId] = useState("");
+  const selectedMinistries = selected
+    .map((id) => ministries.find((ministry) => ministry.id === id))
+    .filter(Boolean) as Ministry[];
+  const availableMinistries = ministries.filter((ministry) => ministry.is_active && !selected.includes(ministry.id));
+
+  return (
+    <div className="campus-bubble-selector">
+      <span className="leader-selector-title">{title}</span>
+      {selected.map((id) => (
+        <input key={id} name={inputName} type="hidden" value={id} />
+      ))}
+      <div className="campus-bubble-field">
+        {selectedMinistries.map((ministry) => (
+          <button
+            className="campus-bubble"
+            type="button"
+            key={ministry.id}
+            title={`Remove ${ministry.name}`}
+            onClick={() => setSelected((current) => current.filter((id) => id !== ministry.id))}
+          >
+            <Users size={14} />
+            <span>{ministry.name}</span>
+            <X size={14} />
+          </button>
+        ))}
+        <select
+          value={ministryId}
+          onChange={(event) => {
+            const nextMinistryId = event.target.value;
+            if (nextMinistryId) setSelected((current) => [...current, nextMinistryId]);
+            setMinistryId("");
+          }}
+        >
+          <option value="">{selected.length ? addAnotherLabel : emptyLabel}</option>
+          {availableMinistries.map((ministry) => (
+            <option key={ministry.id} value={ministry.id}>
+              {ministry.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <small className="form-help">{helpText}</small>
+    </div>
+  );
+}
 function Field({
   name,
   label,
@@ -6094,15 +6203,7 @@ function Field({
     </label>
   );
 }
-function DateTimeField({
-  name,
-  label,
-  defaultValue
-}: {
-  name: string;
-  label: string;
-  defaultValue?: string;
-}) {
+function DateTimeField({ name, label, defaultValue }: { name: string; label: string; defaultValue?: string }) {
   const initial = splitDateTime(defaultValue);
   const [date, setDate] = useState(initial.date);
   const [hour, setHour] = useState(initial.hour);
@@ -6234,10 +6335,7 @@ function eventMatchesHomeCampus(event: EventItem, session: Session) {
   if (session.homeCampusIds.includes(event.campus_id)) return true;
 
   const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
-  const homeCampusNames = session.homeCampus
-    .split(",")
-    .map(normalize)
-    .filter(Boolean);
+  const homeCampusNames = session.homeCampus.split(",").map(normalize).filter(Boolean);
   const eventCampusNames = [event.campus_name, ...(event.participating_campus_names ?? [])].map(normalize);
   return homeCampusNames.some((homeCampusName) => eventCampusNames.includes(homeCampusName));
 }

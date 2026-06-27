@@ -215,6 +215,18 @@ app.get(
          where uhc.user_id=u.id),
         '[]'::jsonb
       ) home_campuses,
+      coalesce(
+        (select array_agg(umm.ministry_id order by m.name)
+         from user_ministry_memberships umm join ministries m on m.id=umm.ministry_id
+         where umm.user_id=u.id),
+        '{}'::uuid[]
+      ) ministry_membership_ids,
+      coalesce(
+        (select jsonb_agg(jsonb_build_object('id', m.id, 'name', m.name) order by m.name)
+         from user_ministry_memberships umm join ministries m on m.id=umm.ministry_id
+         where umm.user_id=u.id),
+        '[]'::jsonb
+      ) ministry_memberships,
       (select coalesce(array_agg(aur.role_code order by aur.role_code), '{}') from app_user_roles aur where aur.user_id=u.id) roles,
       u.status, v.id volunteer_id, v.first_name, v.middle_name, v.last_name,
       v.birth_date, v.profile_photo_path profile_photo_url, v.application_status,
@@ -264,7 +276,8 @@ app.patch(
         smsConsent: z.boolean().optional(),
         emailOptIn: z.boolean().optional(),
         pushOptIn: z.boolean().optional(),
-        homeCampusIds: z.array(uuid).optional()
+        homeCampusIds: z.array(uuid).optional(),
+        ministryMembershipIds: z.array(uuid).optional()
       })
       .parse(req.body);
     await transaction(async (client) => {
@@ -280,15 +293,35 @@ app.patch(
         }
         await client.query("delete from user_home_campuses where user_id=$1", [req.user!.id]);
         for (const [index, campusId] of homeCampusIds.entries()) {
-          await client.query(
-            "insert into user_home_campuses(user_id, campus_id, is_primary) values($1,$2,$3)",
-            [req.user!.id, campusId, index === 0]
-          );
+          await client.query("insert into user_home_campuses(user_id, campus_id, is_primary) values($1,$2,$3)", [
+            req.user!.id,
+            campusId,
+            index === 0
+          ]);
         }
         await client.query("update app_users set home_campus_id=$1 where id=$2", [
           homeCampusIds[0] ?? null,
           req.user!.id
         ]);
+      }
+      if (body.ministryMembershipIds !== undefined) {
+        const ministryMembershipIds = [...new Set(body.ministryMembershipIds)];
+        if (ministryMembershipIds.length) {
+          const ministryResult = await client.query<{ count: number }>(
+            "select count(*)::int count from ministries where id=any($1::uuid[]) and is_active",
+            [ministryMembershipIds]
+          );
+          if (ministryResult.rows[0]?.count !== ministryMembershipIds.length)
+            throw new ApiError("One or more selected ministries are invalid or inactive", 422);
+        }
+        await client.query("delete from user_ministry_memberships where user_id=$1", [req.user!.id]);
+        if (ministryMembershipIds.length) {
+          await client.query(
+            `insert into user_ministry_memberships(user_id, ministry_id)
+             select $1, unnest($2::uuid[])`,
+            [req.user!.id, ministryMembershipIds]
+          );
+        }
       }
       if (req.user!.volunteerId) {
         await client.query(
@@ -524,7 +557,9 @@ app.get(
          latitude, longitude
          from campuses where is_active order by name`
       ),
-      ministries: await all("select * from ministries where is_active order by name"),
+      ministries: await all(
+        "select id, name, description, is_active, created_at, updated_at from ministries where is_active order by name"
+      ),
       roles: await all(
         "select mr.*, m.name ministry_name from ministry_roles mr join ministries m on m.id=mr.ministry_id where mr.is_active order by m.name, mr.name"
       )
@@ -627,6 +662,25 @@ app.get(
   requireAuth,
   requireRole("ADMIN"),
   route(async (_req, res) => {
+    res.json(
+      await all(
+        `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
+         from app_users u join app_user_roles aur on aur.user_id=u.id
+         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER')
+         group by u.id
+         order by coalesce(display_name, email), email`
+      )
+    );
+  })
+);
+
+app.get(
+  "/api/administration/ministry-leader-candidates",
+  requireAuth,
+  route(async (req, res) => {
+    const isMinistryHead = req.user!.ministryIds.length > 0;
+    if (!hasRole(req.user!, "ADMIN") && !isMinistryHead)
+      throw new ApiError("Only an administrator or Ministry Head can view ministry leader candidates", 403);
     res.json(
       await all(
         `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
@@ -853,23 +907,49 @@ app.patch(
   })
 );
 
-const ministryInput = z.object({
+const ministryCampusLeadInput = z.object({
   campusId: uuid,
+  leadUserId: uuid.nullish()
+});
+const ministryInput = z.object({
   name: z.string().trim().min(2),
   description: z.string().trim().nullable().optional(),
+  ministryHeadUserId: uuid.nullish(),
+  campusLeads: z.array(ministryCampusLeadInput).default([]),
   isActive: z.boolean().default(true)
 });
 
 app.get(
   "/api/administration/ministries",
   requireAuth,
-  requireRole("ADMIN"),
-  route(async (_req, res) => {
+  route(async (req, res) => {
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    const isMinistryHead = req.user!.ministryIds.length > 0;
+    if (!isAdmin && !isMinistryHead)
+      throw new ApiError("Only an administrator or Ministry Head can view ministry assignments", 403);
     res.json(
       await all(
-        `select m.id, m.campus_id, c.name campus_name, m.name, m.description, m.is_active, m.created_at, m.updated_at
-        from ministries m join campuses c on c.id=m.campus_id
-        order by m.is_active desc, c.name, m.name`
+        `select m.id, m.name, m.description, m.is_active, m.created_at, m.updated_at,
+        head.user_id ministry_head_user_id,
+        coalesce(head_user.display_name, head_user.email) ministry_head_name,
+        coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'campus_id', c.id,
+            'campus_name', c.name,
+            'lead_user_id', mcl.lead_user_id,
+            'lead_name', coalesce(lead_user.display_name, lead_user.email)
+          ) order by c.name)
+          from campuses c
+          left join ministry_campus_leads mcl on mcl.ministry_id=m.id and mcl.campus_id=c.id
+          left join app_users lead_user on lead_user.id=mcl.lead_user_id
+          where c.is_active or mcl.lead_user_id is not null
+        ), '[]'::jsonb) campus_leads
+        from ministries m
+        left join leader_ministries head on head.ministry_id=m.id
+        left join app_users head_user on head_user.id=head.user_id
+        where $1::boolean or m.id=any($2::uuid[])
+        order by m.is_active desc, m.name`,
+        [isAdmin, req.user!.ministryIds]
       )
     );
   })
@@ -881,26 +961,123 @@ app.post(
   requireRole("ADMIN"),
   route(async (req, res) => {
     const body = ministryInput.parse(req.body);
-    const ministry = await get<{ id: string }>(
-      `insert into ministries(campus_id, name, description, is_active) values($1,$2,$3,$4) returning id`,
-      [body.campusId, body.name, body.description || null, body.isActive]
-    );
-    await audit(req.user!.id, "MINISTRY_CREATED", "ministry", ministry!.id, body);
-    res.status(201).json({ id: ministry!.id });
+    const ministry = await transaction(async (client) => {
+      const leaderIds = [
+        ...(body.ministryHeadUserId ? [body.ministryHeadUserId] : []),
+        ...body.campusLeads.map((lead) => lead.leadUserId).filter(Boolean)
+      ];
+      if (leaderIds.length) {
+        const leaderResult = await client.query<{ count: number }>(
+          `select count(distinct u.id)::int count
+           from app_users u join app_user_roles aur on aur.user_id=u.id
+           where u.id=any($1::uuid[]) and u.status='ACTIVE'
+             and aur.role_code in ('ADMIN','EVENT_LEADER','TEAM_LEADER')`,
+          [[...new Set(leaderIds)]]
+        );
+        if (leaderResult.rows[0]?.count !== new Set(leaderIds).size)
+          throw new ApiError("One or more selected ministry leaders are invalid or inactive", 422);
+      }
+      const campusIds = body.campusLeads.map((lead) => lead.campusId);
+      if (campusIds.length) {
+        const campusResult = await client.query<{ count: number }>(
+          "select count(distinct id)::int count from campuses where id=any($1::uuid[])",
+          [[...new Set(campusIds)]]
+        );
+        if (campusResult.rows[0]?.count !== new Set(campusIds).size)
+          throw new ApiError("One or more selected campuses are invalid", 422);
+      }
+      const created = (
+        await client.query<{ id: string }>(
+          `insert into ministries(name, description, is_active) values($1,$2,$3) returning id`,
+          [body.name, body.description || null, body.isActive]
+        )
+      ).rows[0]!;
+      if (body.ministryHeadUserId) {
+        await client.query("insert into leader_ministries(user_id,ministry_id,assigned_by) values($1,$2,$3)", [
+          body.ministryHeadUserId,
+          created.id,
+          req.user!.id
+        ]);
+      }
+      for (const lead of body.campusLeads) {
+        if (!lead.leadUserId) continue;
+        await client.query(
+          `insert into ministry_campus_leads(ministry_id,campus_id,lead_user_id,assigned_by)
+           values($1,$2,$3,$4)`,
+          [created.id, lead.campusId, lead.leadUserId, req.user!.id]
+        );
+      }
+      return created;
+    });
+    await audit(req.user!.id, "MINISTRY_CREATED", "ministry", ministry.id, body);
+    res.status(201).json({ id: ministry.id });
   })
 );
 
 app.patch(
   "/api/administration/ministries/:ministryId",
   requireAuth,
-  requireRole("ADMIN"),
   route(async (req, res) => {
     const ministryId = uuid.parse(req.params.ministryId);
     const body = ministryInput.parse(req.body);
-    const ministry = await get<{ id: string }>(
-      `update ministries set campus_id=$1, name=$2, description=$3, is_active=$4 where id=$5 returning id`,
-      [body.campusId, body.name, body.description || null, body.isActive, ministryId]
-    );
+    if (!hasRole(req.user!, "ADMIN")) {
+      const canManage = await get("select 1 from leader_ministries where ministry_id=$1 and user_id=$2", [
+        ministryId,
+        req.user!.id
+      ]);
+      if (!canManage) throw new ApiError("Only an administrator or the Ministry Head can update this ministry", 403);
+    }
+    const ministry = await transaction(async (client) => {
+      const leaderIds = [
+        ...(body.ministryHeadUserId ? [body.ministryHeadUserId] : []),
+        ...body.campusLeads.map((lead) => lead.leadUserId).filter(Boolean)
+      ];
+      if (leaderIds.length) {
+        const leaderResult = await client.query<{ count: number }>(
+          `select count(distinct u.id)::int count
+           from app_users u join app_user_roles aur on aur.user_id=u.id
+           where u.id=any($1::uuid[]) and u.status='ACTIVE'
+             and aur.role_code in ('ADMIN','EVENT_LEADER','TEAM_LEADER')`,
+          [[...new Set(leaderIds)]]
+        );
+        if (leaderResult.rows[0]?.count !== new Set(leaderIds).size)
+          throw new ApiError("One or more selected ministry leaders are invalid or inactive", 422);
+      }
+      const campusIds = body.campusLeads.map((lead) => lead.campusId);
+      if (campusIds.length) {
+        const campusResult = await client.query<{ count: number }>(
+          "select count(distinct id)::int count from campuses where id=any($1::uuid[])",
+          [[...new Set(campusIds)]]
+        );
+        if (campusResult.rows[0]?.count !== new Set(campusIds).size)
+          throw new ApiError("One or more selected campuses are invalid", 422);
+      }
+      const updated = (
+        await client.query<{ id: string }>(
+          `update ministries set name=$1, description=$2, is_active=$3 where id=$4 returning id`,
+          [body.name, body.description || null, body.isActive, ministryId]
+        )
+      ).rows[0];
+      if (!updated) return undefined;
+      await client.query("delete from leader_ministries where ministry_id=$1", [ministryId]);
+      if (body.ministryHeadUserId) {
+        await client.query("insert into leader_ministries(user_id,ministry_id,assigned_by) values($1,$2,$3)", [
+          body.ministryHeadUserId,
+          ministryId,
+          req.user!.id
+        ]);
+      }
+      await client.query("delete from ministry_campus_leads where ministry_id=$1", [ministryId]);
+      for (const lead of body.campusLeads) {
+        if (!lead.leadUserId) continue;
+        await client.query(
+          `insert into ministry_campus_leads(ministry_id,campus_id,lead_user_id,assigned_by)
+           values($1,$2,$3,$4)`,
+          [ministryId, lead.campusId, lead.leadUserId, req.user!.id]
+        );
+      }
+      return updated;
+    });
     if (!ministry) return void res.status(404).json({ error: "Ministry not found" });
     await audit(req.user!.id, "MINISTRY_UPDATED", "ministry", ministry.id, body);
     res.json({ message: "Ministry updated" });
@@ -929,10 +1106,10 @@ app.get(
   route(async (_req, res) => {
     res.json(
       await all(
-        `select mr.id, mr.ministry_id, m.name ministry_name, c.name campus_name, mr.name, mr.description,
+        `select mr.id, mr.ministry_id, m.name ministry_name, mr.name, mr.description,
         mr.minimum_age, mr.maximum_age, mr.requires_admin_approval, mr.is_active, mr.created_at, mr.updated_at
-        from ministry_roles mr join ministries m on m.id=mr.ministry_id join campuses c on c.id=m.campus_id
-        order by mr.is_active desc, c.name, m.name, mr.name`
+        from ministry_roles mr join ministries m on m.id=mr.ministry_id
+        order by mr.is_active desc, m.name, mr.name`
       )
     );
   })
@@ -1004,9 +1181,7 @@ app.get(
         ? requestedVolunteerId
         : req.user!.volunteerId;
     const visibleStatuses =
-      hasRole(req.user!, "ADMIN") || hasRole(req.user!, "EVENT_LEADER")
-        ? ["ACTIVE", "DRAFT"]
-        : ["ACTIVE"];
+      hasRole(req.user!, "ADMIN") || hasRole(req.user!, "EVENT_LEADER") ? ["ACTIVE", "DRAFT"] : ["ACTIVE"];
     const events = await all<Record<string, unknown>>(
       `select e.*, c.name campus_name,
        concat_ws(', ', c.address_line_1, nullif(c.address_line_2, ''), c.city, c.region || ' ' || c.postal_code) campus_address,
@@ -1192,14 +1367,7 @@ app.post(
        )
        values($1,$2,$3,$4::jsonb,$5,$6)
        returning *`,
-      [
-        body.name,
-        body.description,
-        body.eventLeaderUserIds,
-        JSON.stringify(body.teams),
-        req.user!.id,
-        body.isActive
-      ]
+      [body.name, body.description, body.eventLeaderUserIds, JSON.stringify(body.teams), req.user!.id, body.isActive]
     );
     await audit(req.user!.id, "EVENT_TEMPLATE_CREATED", "event_template", String(template!.id));
     res.status(201).json(template);
@@ -1223,14 +1391,7 @@ app.patch(
       `update event_templates set
          name=$2, description=$3, event_leader_user_ids=$4, teams=$5::jsonb, is_active=$6
        where id=$1 returning *`,
-      [
-        id,
-        body.name,
-        body.description,
-        body.eventLeaderUserIds,
-        JSON.stringify(body.teams),
-        body.isActive
-      ]
+      [id, body.name, body.description, body.eventLeaderUserIds, JSON.stringify(body.teams), body.isActive]
     );
     await audit(req.user!.id, "EVENT_TEMPLATE_UPDATED", "event_template", id);
     res.json(template);
@@ -1916,9 +2077,19 @@ app.get(
                select array_agg(distinct assigned.name order by assigned.name)
                from (
                  select m.name
+                 from user_ministry_memberships umm
+                 join ministries m on m.id=umm.ministry_id
+                 where umm.user_id=vd.user_id
+                 union
+                 select m.name
                  from leader_ministries lm
                  join ministries m on m.id=lm.ministry_id
                  where lm.user_id=vd.user_id
+                 union
+                 select m.name
+                 from ministry_campus_leads mcl
+                 join ministries m on m.id=mcl.ministry_id
+                 where mcl.lead_user_id=vd.user_id
                  union
                  select m.name
                  from volunteer_role_eligibility vre
@@ -1985,10 +2156,9 @@ app.post(
     if (!isAdmin && !isEventLeader && !leadsEverySelectedTeam)
       throw new ApiError("You can only broadcast to events or event teams you lead", 403);
     if (body.emailTemplateId) {
-      const template = await get<{ id: string }>(
-        "select id from email_templates where id=$1 and is_active",
-        [body.emailTemplateId]
-      );
+      const template = await get<{ id: string }>("select id from email_templates where id=$1 and is_active", [
+        body.emailTemplateId
+      ]);
       if (!template) throw new ApiError("The selected email template is not available", 422);
     }
     const item = await get<{ id: string }>(
