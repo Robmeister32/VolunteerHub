@@ -56,7 +56,9 @@ function toSession(me: Record<string, unknown>): Session {
         ? "EVENT_LEADER"
         : roles.includes("TEAM_LEADER")
           ? "TEAM_LEADER"
-          : "VOLUNTEER",
+          : roles.includes("MINISTRY_HEAD")
+            ? "MINISTRY_HEAD"
+            : "VOLUNTEER",
     volunteerId: me.volunteer_id ? String(me.volunteer_id) : undefined,
     ministryIds: (me.ministry_ids as string[]) ?? []
   };
@@ -79,7 +81,7 @@ export async function downloadExport(type: "volunteers" | "events" | "assignment
   URL.revokeObjectURL(url);
 }
 
-export type UserRole = "ADMIN" | "EVENT_LEADER" | "TEAM_LEADER" | "VOLUNTEER";
+export type UserRole = "ADMIN" | "EVENT_LEADER" | "TEAM_LEADER" | "MINISTRY_HEAD" | "VOLUNTEER";
 
 export interface Session {
   id: string;

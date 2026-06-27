@@ -279,6 +279,36 @@ interface CampusCatalogItem {
   longitude: number;
 }
 
+interface MinistryMembershipRequest {
+  id: string;
+  user_id?: string;
+  volunteer_id?: string;
+  ministry_id: string;
+  ministry_name: string;
+  campus_id: string;
+  campus_name: string;
+  status: "PENDING" | "APPROVED" | "DENIED" | "CANCELLED";
+  requested_at: string;
+  decided_at?: string;
+  decision_reason?: string;
+  decided_by_name?: string;
+  user_name?: string;
+  user_email?: string;
+  volunteer_name?: string;
+}
+
+interface MinistryMember {
+  user_id: string;
+  ministry_id: string;
+  ministry_name: string;
+  campus_id?: string;
+  campus_name?: string;
+  assigned_at: string;
+  user_name: string;
+  user_email: string;
+  volunteer_name?: string;
+}
+
 interface SystemRole {
   code: string;
   name: string;
@@ -313,6 +343,7 @@ const roleLabels = {
   ADMIN: "Church administrator",
   EVENT_LEADER: "Event leader",
   TEAM_LEADER: "Event team leader",
+  MINISTRY_HEAD: "Ministry head",
   VOLUNTEER: "Volunteer"
 };
 const eventStatuses: Array<{ value: EventStatus; label: string }> = [
@@ -2829,7 +2860,14 @@ function Reports() {
 
 function Tools({ session, notify }: { session: Session; notify: (message: string) => void }) {
   const [section, setSection] = useState<
-    "home" | "email-templates" | "event-templates" | "create-event" | "create-events" | "broadcasts"
+    | "home"
+    | "email-templates"
+    | "event-templates"
+    | "create-event"
+    | "create-events"
+    | "broadcasts"
+    | "ministry-registration"
+    | "manage-ministry-membership"
   >("home");
   const [templateCount, setTemplateCount] = useState(0);
   const [eventTemplateCount, setEventTemplateCount] = useState(0);
@@ -2837,6 +2875,13 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
   const canUseTemplates = canManageEmailTemplates(session);
   const canUseBroadcasts = canCreateBroadcasts(session);
   const canUseOneOffEvents = canCreateOneOffEvents(session);
+  const canRegisterForMinistry = Boolean(session.volunteerId);
+  const canManageMinistryMembership =
+    hasRole(session, "ADMIN") ||
+    hasRole(session, "MINISTRY_HEAD") ||
+    hasRole(session, "EVENT_LEADER") ||
+    hasRole(session, "TEAM_LEADER") ||
+    session.ministryIds.length > 0;
 
   useEffect(() => {
     if (canUseTemplates) {
@@ -2875,14 +2920,38 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
   if (section === "broadcasts" && canUseBroadcasts) {
     return <Broadcasts session={session} notify={notify} close={() => setSection("home")} />;
   }
+  if (section === "ministry-registration" && canRegisterForMinistry) {
+    return <MinistryRegistration notify={notify} close={() => setSection("home")} />;
+  }
+  if (section === "manage-ministry-membership" && canManageMinistryMembership) {
+    return <ManageMinistryMembership notify={notify} close={() => setSection("home")} />;
+  }
 
   return (
     <>
       <PageTitle
         eyebrow="Leader tools"
         title="Tools"
-        description="Create reusable resources for communicating with volunteers and event teams."
+        description="Create reusable resources, register for ministry service, and manage team membership."
       />
+      <div className="maintenance-card-grid tools-card-grid">
+        {canRegisterForMinistry && (
+          <MaintenanceCard
+            icon={<UserCheck />}
+            title="Ministry Registration"
+            description="Request membership in a ministry at a campus."
+            onClick={() => setSection("ministry-registration")}
+          />
+        )}
+        {canManageMinistryMembership && (
+          <MaintenanceCard
+            icon={<Users />}
+            title="Manage Ministry Membership"
+            description="Approve ministry requests and review members by campus."
+            onClick={() => setSection("manage-ministry-membership")}
+          />
+        )}
+      </div>
       <div className="maintenance-card-grid tools-card-grid">
         {canUseOneOffEvents && (
           <MaintenanceCard
@@ -2933,9 +3002,278 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
           </div>
         </>
       )}
-      {!canUseOneOffEvents && !canUseTemplates && !canUseBroadcasts && (
+      {!canRegisterForMinistry &&
+        !canManageMinistryMembership &&
+        !canUseOneOffEvents &&
+        !canUseTemplates &&
+        !canUseBroadcasts && (
         <Empty text="No tools are available for your current role." />
       )}
+    </>
+  );
+}
+
+function MinistryRegistration({ notify, close }: { notify: (message: string) => void; close: () => void }) {
+  const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>({
+    campuses: [],
+    ministries: []
+  });
+  const [requests, setRequests] = useState<MinistryMembershipRequest[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const load = useCallback(() => {
+    Promise.all([
+      api<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>("/catalog"),
+      api<MinistryMembershipRequest[]>("/tools/ministry-membership/my-requests")
+    ])
+      .then(([catalogRows, requestRows]) => {
+        setCatalog(catalogRows);
+        setRequests(requestRows);
+      })
+      .catch((error) => notify((error as Error).message));
+  }, [notify]);
+
+  useEffect(load, [load]);
+
+  const blockedMinistryIds = new Set(
+    requests
+      .filter((request) => request.status !== "CANCELLED")
+      .map((request) => request.ministry_id)
+  );
+  const availableMinistries = catalog.ministries.filter((ministry) => !blockedMinistryIds.has(ministry.id));
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const ministryId = String(formData.get("ministryId") ?? "");
+    const campusId = String(formData.get("campusId") ?? "");
+    if (!ministryId || !campusId) return notify("Select a ministry and campus.");
+    setSubmitting(true);
+    try {
+      await api("/tools/ministry-membership/requests", {
+        method: "POST",
+        body: JSON.stringify({ ministryId, campusId })
+      });
+      notify("Ministry membership request submitted.");
+      event.currentTarget.reset();
+      load();
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Ministry Registration" }]} />
+      <PageTitle
+        eyebrow="Ministry"
+        title="Ministry Registration"
+        description="Choose the ministry and campus where you would like to serve."
+      />
+      <form className="card campus-form" onSubmit={submit}>
+        <MaintenanceFormTitle
+          icon={<UserCheck />}
+          title="Request membership"
+          description="One pending or approved request is allowed per ministry."
+        />
+        <label>
+          Ministry
+          <select name="ministryId" required>
+            <option value="">Select a ministry</option>
+            {availableMinistries.map((ministry) => (
+              <option key={ministry.id} value={ministry.id}>
+                {ministry.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Campus
+          <select name="campusId" required>
+            <option value="">Select a campus</option>
+            {catalog.campuses.map((campus) => (
+              <option key={campus.id} value={campus.id}>
+                {campus.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="card-actions">
+          <button className="primary" disabled={submitting || !availableMinistries.length || !catalog.campuses.length}>
+            {submitting ? "Submitting..." : "Submit request"}
+          </button>
+          <button className="secondary" type="button" onClick={close}>
+            Cancel
+          </button>
+        </div>
+      </form>
+      <Card title="My ministry requests">
+        {requests.length ? (
+          <div className="table campus-table ministry-membership-list">
+            {requests.map((request) => (
+              <div className="table-row" key={request.id}>
+                <span className="grow">
+                  <strong>{request.ministry_name}</strong>
+                  <small>
+                    {request.campus_name} · {formatDate(request.requested_at)}
+                  </small>
+                  {request.decision_reason && <small>{request.decision_reason}</small>}
+                </span>
+                <span className="pill">{request.status}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty text="No ministry requests have been submitted." />
+        )}
+      </Card>
+    </>
+  );
+}
+
+function ManageMinistryMembership({ notify, close }: { notify: (message: string) => void; close: () => void }) {
+  const [tab, setTab] = useState<"pending" | "members">("pending");
+  const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
+  const [campusFilter, setCampusFilter] = useState("");
+  const [requests, setRequests] = useState<MinistryMembershipRequest[]>([]);
+  const [members, setMembers] = useState<MinistryMember[]>([]);
+  const [busyRequestId, setBusyRequestId] = useState("");
+
+  const loadCampuses = useCallback(() => {
+    api<{ campuses: CampusCatalogItem[] }>("/catalog")
+      .then((catalogRows) => setCampuses(catalogRows.campuses))
+      .catch((error) => notify((error as Error).message));
+  }, [notify]);
+
+  const loadRequests = useCallback(() => {
+    api<MinistryMembershipRequest[]>("/tools/ministry-membership/requests")
+      .then(setRequests)
+      .catch((error) => notify((error as Error).message));
+  }, [notify]);
+
+  const loadMembers = useCallback(() => {
+    const query = campusFilter ? `?campusId=${encodeURIComponent(campusFilter)}` : "";
+    api<MinistryMember[]>(`/tools/ministry-membership/members${query}`)
+      .then(setMembers)
+      .catch((error) => notify((error as Error).message));
+  }, [campusFilter, notify]);
+
+  useEffect(loadCampuses, [loadCampuses]);
+  useEffect(loadRequests, [loadRequests]);
+  useEffect(loadMembers, [loadMembers]);
+
+  const decide = async (requestId: string, decision: "APPROVED" | "DENIED") => {
+    setBusyRequestId(requestId);
+    try {
+      await api(`/tools/ministry-membership/requests/${requestId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ decision })
+      });
+      notify(decision === "APPROVED" ? "Membership request approved." : "Membership request denied.");
+      loadRequests();
+      loadMembers();
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setBusyRequestId("");
+    }
+  };
+
+  return (
+    <>
+      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Manage Ministry Membership" }]} />
+      <PageTitle
+        eyebrow="Ministry"
+        title="Manage Ministry Membership"
+        description="Review requests and inspect active ministry membership by campus."
+      />
+      <Card
+        title="Ministry membership"
+        action={
+          <div className="location-filter" aria-label="Ministry membership tabs">
+            <button type="button" className={tab === "pending" ? "active" : ""} onClick={() => setTab("pending")}>
+              Pending
+            </button>
+            <button type="button" className={tab === "members" ? "active" : ""} onClick={() => setTab("members")}>
+              Members
+            </button>
+          </div>
+        }
+      >
+        {tab === "pending" ? (
+          requests.length ? (
+            <div className="table campus-table ministry-membership-list">
+              {requests.map((request) => (
+                <div className="table-row ministry-membership-row" key={request.id}>
+                  <span className="grow">
+                    <strong>{request.volunteer_name || request.user_name || request.user_email}</strong>
+                    <small>
+                      {request.ministry_name} · {request.campus_name}
+                    </small>
+                    <small>{request.user_email}</small>
+                  </span>
+                  <div className="campus-actions">
+                    <button
+                      className="primary"
+                      type="button"
+                      disabled={busyRequestId === request.id}
+                      onClick={() => decide(request.id, "APPROVED")}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={busyRequestId === request.id}
+                      onClick={() => decide(request.id, "DENIED")}
+                    >
+                      Deny
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Empty text="No pending ministry membership requests." />
+          )
+        ) : (
+          <>
+            <div className="filter-bar event-filter-bar ministry-member-filter">
+              <label>
+                Campus
+                <select value={campusFilter} onChange={(event) => setCampusFilter(event.target.value)}>
+                  <option value="">All campuses</option>
+                  {campuses.map((campus) => (
+                    <option key={campus.id} value={campus.id}>
+                      {campus.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {members.length ? (
+              <div className="table campus-table ministry-membership-list">
+                {members.map((member) => (
+                  <div className="table-row" key={`${member.user_id}-${member.ministry_id}`}>
+                    <span className="grow">
+                      <strong>{member.volunteer_name || member.user_name}</strong>
+                      <small>
+                        {member.ministry_name} · {member.campus_name || "Campus not assigned"}
+                      </small>
+                      <small>{member.user_email}</small>
+                    </span>
+                    <small>{formatDate(member.assigned_at)}</small>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Empty text="No ministry members match this filter." />
+            )}
+          </>
+        )}
+      </Card>
     </>
   );
 }

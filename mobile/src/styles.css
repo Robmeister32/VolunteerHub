@@ -2590,6 +2590,20 @@ form.audit-search {
 .ministry-group .campus-table .table-row:last-child {
   border-bottom: 0;
 }
+.ministry-membership-list .table-row {
+  align-items: center;
+  gap: 12px;
+}
+.ministry-membership-row .campus-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.ministry-member-filter {
+  margin-bottom: 12px;
+}
+.ministry-member-filter label {
+  min-width: min(100%, 260px);
+}
 .campus-actions {
   display: flex;
   gap: 6px;

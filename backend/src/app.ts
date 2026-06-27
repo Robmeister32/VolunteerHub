@@ -6,7 +6,7 @@ import { hasRole, requireAuth, requireFirebase, requireRole } from "./auth.js";
 import { haversineMeters } from "./domain.js";
 import { geocodeAddress, GeocodingError } from "./geocoding.js";
 import { createTwilioConversationAccess } from "./twilio-conversations.js";
-import type { AuthedRequest } from "./types.js";
+import type { AuthedRequest, AuthUser } from "./types.js";
 
 export const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGINS?.split(",") ?? true }));
@@ -564,6 +564,206 @@ app.get(
         "select mr.*, m.name ministry_name from ministry_roles mr join ministries m on m.id=mr.ministry_id where mr.is_active order by m.name, mr.name"
       )
     });
+  })
+);
+
+async function canManageMinistryMembership(user: AuthUser, ministryId: string, campusId?: string) {
+  if (hasRole(user, "ADMIN")) return true;
+  const manager = await get(
+    `select 1
+     where exists (
+       select 1 from leader_ministries lm
+       where lm.user_id=$1 and lm.ministry_id=$2
+     )
+     or exists (
+       select 1 from ministry_campus_leads mcl
+       where mcl.lead_user_id=$1 and mcl.ministry_id=$2
+         and ($3::uuid is null or mcl.campus_id=$3)
+     )`,
+    [user.id, ministryId, campusId ?? null]
+  );
+  return Boolean(manager);
+}
+
+app.get(
+  "/api/tools/ministry-membership/my-requests",
+  requireAuth,
+  route(async (req, res) => {
+    res.json(
+      await all(
+        `select r.id, r.ministry_id, m.name ministry_name, r.campus_id, c.name campus_name,
+         r.status, r.requested_at, r.decided_at, r.decision_reason,
+         coalesce(decider.display_name, decider.email) decided_by_name
+         from ministry_membership_requests r
+         join ministries m on m.id=r.ministry_id
+         join campuses c on c.id=r.campus_id
+         left join app_users decider on decider.id=r.decided_by
+         where r.user_id=$1
+         order by r.requested_at desc`,
+        [req.user!.id]
+      )
+    );
+  })
+);
+
+app.post(
+  "/api/tools/ministry-membership/requests",
+  requireAuth,
+  route(async (req, res) => {
+    if (!req.user!.volunteerId) throw new ApiError("Only volunteer profiles can request ministry membership", 403);
+    const body = z.object({ ministryId: uuid, campusId: uuid }).parse(req.body);
+    const target = await get<{ ministry_name: string; campus_name: string }>(
+      `select m.name ministry_name, c.name campus_name
+       from ministries m cross join campuses c
+       where m.id=$1 and c.id=$2 and m.is_active and c.is_active`,
+      [body.ministryId, body.campusId]
+    );
+    if (!target) throw new ApiError("Select an active ministry and campus", 422);
+    const membership = await get(
+      "select 1 from user_ministry_memberships where user_id=$1 and ministry_id=$2",
+      [req.user!.id, body.ministryId]
+    );
+    if (membership) throw new ApiError("You are already a member of this ministry", 409);
+    const existingRequest = await get(
+      `select 1 from ministry_membership_requests
+       where user_id=$1 and ministry_id=$2`,
+      [req.user!.id, body.ministryId]
+    );
+    if (existingRequest) throw new ApiError("You already submitted a request for this ministry", 409);
+    const request = await get<{ id: string }>(
+      `insert into ministry_membership_requests(user_id, volunteer_id, ministry_id, campus_id)
+       values($1,$2,$3,$4) returning id`,
+      [req.user!.id, req.user!.volunteerId, body.ministryId, body.campusId]
+    );
+    await audit(req.user!.id, "MINISTRY_MEMBERSHIP_REQUESTED", "ministry_membership_request", request!.id, {
+      ministryId: body.ministryId,
+      campusId: body.campusId
+    });
+    res.status(201).json({ id: request!.id });
+  })
+);
+
+app.get(
+  "/api/tools/ministry-membership/requests",
+  requireAuth,
+  route(async (req, res) => {
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    res.json(
+      await all(
+        `select r.id, r.user_id, r.volunteer_id, r.ministry_id, m.name ministry_name,
+         r.campus_id, c.name campus_name, r.status, r.requested_at,
+         coalesce(u.display_name, u.email) user_name, u.email user_email,
+         concat_ws(' ', vp.first_name, nullif(vp.middle_name, ''), vp.last_name) volunteer_name
+         from ministry_membership_requests r
+         join app_users u on u.id=r.user_id
+         left join volunteer_profiles vp on vp.id=r.volunteer_id
+         join ministries m on m.id=r.ministry_id
+         join campuses c on c.id=r.campus_id
+         where r.status='PENDING'
+           and (
+             $1::boolean
+             or exists (
+               select 1 from leader_ministries lm
+               where lm.user_id=$2 and lm.ministry_id=r.ministry_id
+             )
+             or exists (
+               select 1 from ministry_campus_leads mcl
+               where mcl.lead_user_id=$2 and mcl.ministry_id=r.ministry_id and mcl.campus_id=r.campus_id
+             )
+           )
+         order by r.requested_at, m.name, c.name`,
+        [isAdmin, req.user!.id]
+      )
+    );
+  })
+);
+
+app.patch(
+  "/api/tools/ministry-membership/requests/:requestId",
+  requireAuth,
+  route(async (req, res) => {
+    const requestId = uuid.parse(req.params.requestId);
+    const body = z
+      .object({
+        decision: z.enum(["APPROVED", "DENIED"]),
+        reason: z.string().trim().max(500).optional()
+      })
+      .parse(req.body);
+    const request = await transaction(async (client) => {
+      const current = (
+        await client.query<{
+          id: string;
+          user_id: string;
+          ministry_id: string;
+          campus_id: string;
+          status: string;
+        }>("select id, user_id, ministry_id, campus_id, status from ministry_membership_requests where id=$1 for update", [
+          requestId
+        ])
+      ).rows[0];
+      if (!current) throw new ApiError("Membership request not found", 404);
+      if (current.status !== "PENDING") throw new ApiError("This membership request has already been decided", 409);
+      if (!(await canManageMinistryMembership(req.user!, current.ministry_id, current.campus_id)))
+        throw new ApiError("Only the Ministry Head or campus ministry lead can decide this request", 403);
+      await client.query(
+        `update ministry_membership_requests
+         set status=$2, decided_by=$3, decided_at=now(), decision_reason=$4
+         where id=$1`,
+        [requestId, body.decision, req.user!.id, body.reason ?? null]
+      );
+      if (body.decision === "APPROVED") {
+        await client.query(
+          `insert into user_ministry_memberships(user_id, ministry_id, campus_id, assigned_at)
+           values($1,$2,$3,now())
+           on conflict (user_id, ministry_id) do update
+           set campus_id=excluded.campus_id, assigned_at=now()`,
+          [current.user_id, current.ministry_id, current.campus_id]
+        );
+      }
+      return current;
+    });
+    await audit(req.user!.id, `MINISTRY_MEMBERSHIP_${body.decision}`, "ministry_membership_request", requestId, {
+      userId: request.user_id,
+      ministryId: request.ministry_id,
+      campusId: request.campus_id,
+      reason: body.reason
+    });
+    res.json({ status: body.decision });
+  })
+);
+
+app.get(
+  "/api/tools/ministry-membership/members",
+  requireAuth,
+  route(async (req, res) => {
+    const campusId = typeof req.query.campusId === "string" && req.query.campusId ? uuid.parse(req.query.campusId) : null;
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    res.json(
+      await all(
+        `select umm.user_id, umm.ministry_id, m.name ministry_name, umm.campus_id, c.name campus_name,
+         umm.assigned_at, coalesce(u.display_name, u.email) user_name, u.email user_email,
+         concat_ws(' ', vp.first_name, nullif(vp.middle_name, ''), vp.last_name) volunteer_name
+         from user_ministry_memberships umm
+         join app_users u on u.id=umm.user_id
+         left join volunteer_profiles vp on vp.app_user_id=u.id
+         join ministries m on m.id=umm.ministry_id
+         left join campuses c on c.id=umm.campus_id
+         where ($3::uuid is null or umm.campus_id=$3)
+           and (
+             $1::boolean
+             or exists (
+               select 1 from leader_ministries lm
+               where lm.user_id=$2 and lm.ministry_id=umm.ministry_id
+             )
+             or exists (
+               select 1 from ministry_campus_leads mcl
+               where mcl.lead_user_id=$2 and mcl.ministry_id=umm.ministry_id and mcl.campus_id=umm.campus_id
+             )
+           )
+         order by m.name, c.name nulls last, coalesce(u.display_name, u.email)`,
+        [isAdmin, req.user!.id, campusId]
+      )
+    );
   })
 );
 

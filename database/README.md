@@ -69,7 +69,7 @@ FastAPI should generate short-lived signed URLs only after checking the caller's
 
 - `app_users`, `user_home_campuses`, `roles`, `app_user_roles`: Firebase identities, home-campus preferences, and assignable system roles
 - `volunteer_profiles`, `households`, `guardian_authorizations`: people and families
-- `ministries`, `ministry_roles`, `leader_ministries`, `ministry_campus_leads`, `user_ministry_memberships`: organizational authorization, campus leads, and profile memberships
+- `ministries`, `ministry_roles`, `leader_ministries`, `ministry_campus_leads`, `user_ministry_memberships`, `ministry_membership_requests`: organizational authorization, campus leads, profile memberships, and volunteer membership approvals
 - `requirement_definitions`, `role_requirements`, `volunteer_requirement_records`: compliance and training
 - `events`, `event_groups`, `assignments`, `assignment_change_requests`, `attendance`: scheduling, event locations, and participating campus targeting
 - `broadcasts`, `broadcast_deliveries`, `conversations`, `messages`, `outbox_jobs`: communication and provider work
