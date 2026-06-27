@@ -2655,10 +2655,14 @@ form.audit-search {
 }
 .role-assignment-options .check-label {
   align-items: flex-start;
+  width: 100%;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
+}
+.role-assignment-options .check-label span {
+  min-width: 0;
 }
 .role-assignment-options strong,
 .role-assignment-options small {

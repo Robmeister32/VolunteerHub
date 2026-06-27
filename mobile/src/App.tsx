@@ -5288,12 +5288,64 @@ function SystemRoleMaintenance({ notify, close }: { notify: (m: string) => void;
       });
       notify(editing ? "System role updated." : "System role created.");
       setEditing(null);
-      setFormOpen(false);
       void load();
     } catch (error) {
       notify((error as Error).message);
     }
   };
+
+  if (formOpen) {
+    return (
+      <>
+        <Breadcrumbs
+          items={[
+            { label: "Administration", onClick: close },
+            { label: "System Roles", onClick: () => setFormOpen(false) },
+            { label: editing ? "Edit System Role" : "Add System Role" }
+          ]}
+        />
+        <PageTitle
+          eyebrow="Administration"
+          title={editing ? "Edit system role" : "Add system role"}
+          description={
+            editing
+              ? "Update this application role's display details."
+              : "Create an application role that can be assigned to users."
+          }
+        />
+        <Card title={editing ? "System role details" : "New system role"}>
+          <form className="campus-form campus-form-page" key={editing?.code ?? "new"} onSubmit={save}>
+            <MaintenanceFormTitle
+              icon={<Settings size={19} />}
+              title={editing ? "Edit system role" : "Add system role"}
+              description="Role codes are permanent identifiers used by authorization rules."
+            />
+            {editing ? (
+              <label>
+                Role code
+                <input value={editing.code} disabled />
+              </label>
+            ) : (
+              <Field name="code" label="Role code" />
+            )}
+            <Field name="name" label="Display name" defaultValue={editing?.name} />
+            <label>
+              Description
+              <textarea name="description" rows={4} defaultValue={editing?.description} />
+            </label>
+            <ActiveCheckbox label="Role is active" checked={editing?.is_active ?? true} />
+            <MaintenanceFormActions
+              editing={Boolean(editing)}
+              cancel={() => {
+                setEditing(null);
+                setFormOpen(false);
+              }}
+            />
+          </form>
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>
@@ -5316,64 +5368,32 @@ function SystemRoleMaintenance({ notify, close }: { notify: (m: string) => void;
           </button>
         }
       >
-        <div className={formOpen ? "administration-grid" : ""}>
-          <div className="table campus-table">
-            {roles.map((role) => (
-              <div className="table-row" key={role.code}>
-                <span className="attention-icon amber">
-                  <Settings size={19} />
-                </span>
-                <span className="grow">
-                  <strong>{role.name}</strong>
-                  <small>
-                    {role.code} · {role.assignment_count} assignments · {role.description || "No description"}
-                  </small>
-                </span>
-                <span className={`status ${role.is_active ? "approved" : "inactive"}`}>
-                  {role.is_active ? "Active" : "Inactive"}
-                </span>
-                <button
-                  className="secondary"
-                  onClick={() => {
-                    setEditing(role);
-                    setFormOpen(true);
-                  }}
-                >
-                  <Pencil size={15} /> Edit
-                </button>
-              </div>
-            ))}
-          </div>
-          {formOpen && (
-            <form className="campus-form" key={editing?.code ?? "new"} onSubmit={save}>
-              <MaintenanceFormTitle
-                icon={<Settings size={19} />}
-                title={editing ? "Edit system role" : "Add system role"}
-                description="Role codes are permanent identifiers used by authorization rules."
-              />
-              {editing ? (
-                <label>
-                  Role code
-                  <input value={editing.code} disabled />
-                </label>
-              ) : (
-                <Field name="code" label="Role code" />
-              )}
-              <Field name="name" label="Display name" defaultValue={editing?.name} />
-              <label>
-                Description
-                <textarea name="description" rows={4} defaultValue={editing?.description} />
-              </label>
-              <ActiveCheckbox label="Role is active" checked={editing?.is_active ?? true} />
-              <MaintenanceFormActions
-                editing={Boolean(editing)}
-                cancel={() => {
-                  setEditing(null);
-                  setFormOpen(false);
+        <div className="table campus-table">
+          {roles.map((role) => (
+            <div className="table-row" key={role.code}>
+              <span className="attention-icon amber">
+                <Settings size={19} />
+              </span>
+              <span className="grow">
+                <strong>{role.name}</strong>
+                <small>
+                  {role.code} · {role.assignment_count} assignments · {role.description || "No description"}
+                </small>
+              </span>
+              <span className={`status ${role.is_active ? "approved" : "inactive"}`}>
+                {role.is_active ? "Active" : "Inactive"}
+              </span>
+              <button
+                className="secondary"
+                onClick={() => {
+                  setEditing(role);
+                  setFormOpen(true);
                 }}
-              />
-            </form>
-          )}
+              >
+                <Pencil size={15} /> Edit
+              </button>
+            </div>
+          ))}
         </div>
       </Card>
     </>
