@@ -4870,7 +4870,8 @@ function MinistryMaintenance({
 }) {
   const [ministries, setMinistries] = useState<Ministry[]>([]);
   const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
-  const [leaders, setLeaders] = useState<EventLeader[]>([]);
+  const [ministryHeads, setMinistryHeads] = useState<EventLeader[]>([]);
+  const [campusLeads, setCampusLeads] = useState<EventLeader[]>([]);
   const [editing, setEditing] = useState<Ministry | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const canCreate = hasRole(session, "ADMIN");
@@ -4878,13 +4879,26 @@ function MinistryMaintenance({
   const load = () =>
     Promise.all([
       api<Ministry[]>("/administration/ministries"),
-      api<{ campuses: CampusCatalogItem[] }>("/catalog"),
-      api<EventLeader[]>("/administration/ministry-leader-candidates")
+      canCreate
+        ? api<Campus[]>("/administration/campuses").then((rows) =>
+            rows.map((campus) => ({
+              id: campus.id,
+              name: campus.name,
+              address: [campus.address_line_1, campus.city, campus.region, campus.postal_code]
+                .filter(Boolean)
+                .join(", "),
+              latitude: Number(campus.latitude ?? 0),
+              longitude: Number(campus.longitude ?? 0)
+            }))
+          )
+        : api<{ campuses: CampusCatalogItem[] }>("/catalog").then((catalog) => catalog.campuses),
+      api<{ ministryHeads: EventLeader[]; campusLeads: EventLeader[] }>("/administration/ministry-leader-candidates")
     ])
-      .then(([ministryRows, catalog, leaderRows]) => {
+      .then(([ministryRows, campusRows, leaderRows]) => {
         setMinistries(ministryRows);
-        setCampuses(catalog.campuses);
-        setLeaders(leaderRows);
+        setCampuses(campusRows);
+        setMinistryHeads(leaderRows.ministryHeads);
+        setCampusLeads(leaderRows.campusLeads);
       })
       .catch((error) => notify((error as Error).message));
 
@@ -5036,7 +5050,7 @@ function MinistryMaintenance({
                 Ministry Head
                 <select name="ministryHeadUserId" defaultValue={editing?.ministry_head_user_id ?? ""}>
                   <option value="">Unassigned</option>
-                  {leaders.map((leader) => (
+                  {ministryHeads.map((leader) => (
                     <option key={leader.id} value={leader.id}>
                       {leaderLabel(leader)}
                     </option>
@@ -5053,7 +5067,7 @@ function MinistryMaintenance({
                     </span>
                     <select name={`campusLead-${lead.campusId}`} defaultValue={lead.leadUserId}>
                       <option value="">Unassigned</option>
-                      {leaders.map((leader) => (
+                      {campusLeads.map((leader) => (
                         <option key={leader.id} value={leader.id}>
                           {leaderLabel(leader)}
                         </option>

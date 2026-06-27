@@ -681,15 +681,21 @@ app.get(
     const isMinistryHead = req.user!.ministryIds.length > 0;
     if (!hasRole(req.user!, "ADMIN") && !isMinistryHead)
       throw new ApiError("Only an administrator or Ministry Head can view ministry leader candidates", 403);
-    res.json(
-      await all(
-        `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
+    const ministryHeads = await all(
+      `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
+       from app_users u join app_user_roles aur on aur.user_id=u.id
+       where u.status='ACTIVE' and aur.role_code='MINISTRY_HEAD'
+       group by u.id
+       order by coalesce(display_name, email), email`
+    );
+    const campusLeads = await all(
+      `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
          from app_users u join app_user_roles aur on aur.user_id=u.id
-         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER')
+         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER', 'MINISTRY_HEAD')
          group by u.id
          order by coalesce(display_name, email), email`
-      )
     );
+    res.json({ ministryHeads, campusLeads });
   })
 );
 
@@ -962,20 +968,27 @@ app.post(
   route(async (req, res) => {
     const body = ministryInput.parse(req.body);
     const ministry = await transaction(async (client) => {
-      const leaderIds = [
-        ...(body.ministryHeadUserId ? [body.ministryHeadUserId] : []),
-        ...body.campusLeads.map((lead) => lead.leadUserId).filter(Boolean)
-      ];
-      if (leaderIds.length) {
+      if (body.ministryHeadUserId) {
+        const ministryHeadResult = await client.query<{ count: number }>(
+          `select count(distinct u.id)::int count
+           from app_users u join app_user_roles aur on aur.user_id=u.id
+           where u.id=$1 and u.status='ACTIVE' and aur.role_code='MINISTRY_HEAD'`,
+          [body.ministryHeadUserId]
+        );
+        if (ministryHeadResult.rows[0]?.count !== 1)
+          throw new ApiError("The selected Ministry Head must have the Ministry Head system role", 422);
+      }
+      const campusLeadIds = body.campusLeads.map((lead) => lead.leadUserId).filter(Boolean);
+      if (campusLeadIds.length) {
         const leaderResult = await client.query<{ count: number }>(
           `select count(distinct u.id)::int count
            from app_users u join app_user_roles aur on aur.user_id=u.id
            where u.id=any($1::uuid[]) and u.status='ACTIVE'
-             and aur.role_code in ('ADMIN','EVENT_LEADER','TEAM_LEADER')`,
-          [[...new Set(leaderIds)]]
+             and aur.role_code in ('ADMIN','EVENT_LEADER','TEAM_LEADER','MINISTRY_HEAD')`,
+          [[...new Set(campusLeadIds)]]
         );
-        if (leaderResult.rows[0]?.count !== new Set(leaderIds).size)
-          throw new ApiError("One or more selected ministry leaders are invalid or inactive", 422);
+        if (leaderResult.rows[0]?.count !== new Set(campusLeadIds).size)
+          throw new ApiError("One or more selected campus leads are invalid or inactive", 422);
       }
       const campusIds = body.campusLeads.map((lead) => lead.campusId);
       if (campusIds.length) {
@@ -1028,20 +1041,27 @@ app.patch(
       if (!canManage) throw new ApiError("Only an administrator or the Ministry Head can update this ministry", 403);
     }
     const ministry = await transaction(async (client) => {
-      const leaderIds = [
-        ...(body.ministryHeadUserId ? [body.ministryHeadUserId] : []),
-        ...body.campusLeads.map((lead) => lead.leadUserId).filter(Boolean)
-      ];
-      if (leaderIds.length) {
+      if (body.ministryHeadUserId) {
+        const ministryHeadResult = await client.query<{ count: number }>(
+          `select count(distinct u.id)::int count
+           from app_users u join app_user_roles aur on aur.user_id=u.id
+           where u.id=$1 and u.status='ACTIVE' and aur.role_code='MINISTRY_HEAD'`,
+          [body.ministryHeadUserId]
+        );
+        if (ministryHeadResult.rows[0]?.count !== 1)
+          throw new ApiError("The selected Ministry Head must have the Ministry Head system role", 422);
+      }
+      const campusLeadIds = body.campusLeads.map((lead) => lead.leadUserId).filter(Boolean);
+      if (campusLeadIds.length) {
         const leaderResult = await client.query<{ count: number }>(
           `select count(distinct u.id)::int count
            from app_users u join app_user_roles aur on aur.user_id=u.id
            where u.id=any($1::uuid[]) and u.status='ACTIVE'
-             and aur.role_code in ('ADMIN','EVENT_LEADER','TEAM_LEADER')`,
-          [[...new Set(leaderIds)]]
+             and aur.role_code in ('ADMIN','EVENT_LEADER','TEAM_LEADER','MINISTRY_HEAD')`,
+          [[...new Set(campusLeadIds)]]
         );
-        if (leaderResult.rows[0]?.count !== new Set(leaderIds).size)
-          throw new ApiError("One or more selected ministry leaders are invalid or inactive", 422);
+        if (leaderResult.rows[0]?.count !== new Set(campusLeadIds).size)
+          throw new ApiError("One or more selected campus leads are invalid or inactive", 422);
       }
       const campusIds = body.campusLeads.map((lead) => lead.campusId);
       if (campusIds.length) {
