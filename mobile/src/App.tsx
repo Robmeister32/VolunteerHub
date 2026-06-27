@@ -1635,7 +1635,8 @@ function CreateEvent({
   }, []);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const data = Object.fromEntries(formData);
     try {
       await api("/events", {
@@ -3043,7 +3044,8 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const ministryId = String(formData.get("ministryId") ?? "");
     const campusId = String(formData.get("campusId") ?? "");
     if (!ministryId || !campusId) return notify("Select a ministry and campus.");
@@ -3054,7 +3056,7 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
         body: JSON.stringify({ ministryId, campusId })
       });
       notify("Ministry membership request submitted.");
-      event.currentTarget.reset();
+      form.reset();
       load();
     } catch (error) {
       notify((error as Error).message);
