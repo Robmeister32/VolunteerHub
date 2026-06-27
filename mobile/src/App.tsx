@@ -3022,14 +3022,13 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(() => {
-    Promise.all([
-      api<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>("/catalog"),
-      api<MinistryMembershipRequest[]>("/tools/ministry-membership/my-requests")
-    ])
-      .then(([catalogRows, requestRows]) => {
+    api<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>("/catalog")
+      .then((catalogRows) => {
         setCatalog(catalogRows);
-        setRequests(requestRows);
       })
+      .catch((error) => notify((error as Error).message));
+    api<MinistryMembershipRequest[]>("/tools/ministry-membership/my-requests")
+      .then(setRequests)
       .catch((error) => notify((error as Error).message));
   }, [notify]);
 
