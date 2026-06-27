@@ -4974,6 +4974,76 @@ function MinistryMaintenance({
 
   const sortedMinistries = [...ministries].sort((left, right) => left.name.localeCompare(right.name));
 
+  if (formOpen) {
+    const closeForm = () => {
+      setEditing(null);
+      setFormOpen(false);
+    };
+    return (
+      <>
+        <Breadcrumbs
+          items={[
+            { label: "Administration", onClick: close },
+            { label: "Ministry", onClick: closeForm },
+            { label: editing ? "Edit Ministry" : "Add Ministry" }
+          ]}
+        />
+        <PageTitle
+          eyebrow="Administration"
+          title={editing ? "Edit ministry" : "Add ministry"}
+          description={editing ? "Update this ministry's details and leaders." : "Create a ministry."}
+        />
+        <Card title={editing ? "Ministry details" : "New ministry"}>
+          <form className="campus-form campus-form-page" key={editing?.id ?? "new"} onSubmit={save}>
+            <MaintenanceFormTitle
+              icon={<Users size={19} />}
+              title={editing ? "Edit ministry" : "Add ministry"}
+              description={editing ? "Update this ministry's details and leaders." : "Create a ministry."}
+            />
+            <Field name="name" label="Ministry name" defaultValue={editing?.name} />
+            <label>
+              Description
+              <textarea name="description" rows={4} defaultValue={editing?.description} />
+            </label>
+            <label>
+              Ministry Head
+              <select name="ministryHeadUserId" defaultValue={editing?.ministry_head_user_id ?? ""}>
+                <option value="">Unassigned</option>
+                {ministryHeads.map((leader) => (
+                  <option key={leader.id} value={leader.id}>
+                    {leaderLabel(leader)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="campus-lead-list">
+              <span className="leader-selector-title">Campus leads</span>
+              {campusLeadsFor(editing).map((lead) => (
+                <label className="campus-lead-row" key={lead.campusId}>
+                  <span>
+                    <Building2 size={15} />
+                    {lead.campusName}
+                  </span>
+                  <select name={`campusLead-${lead.campusId}`} defaultValue={lead.leadUserId}>
+                    <option value="">Unassigned</option>
+                    {campusLeads.map((leader) => (
+                      <option key={leader.id} value={leader.id}>
+                        {leaderLabel(leader)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+              {!campuses.length && <small className="form-help">Create campuses before assigning campus leads.</small>}
+            </div>
+            <ActiveCheckbox label="Ministry is active" checked={editing?.is_active ?? true} />
+            <MaintenanceFormActions editing={Boolean(editing)} cancel={closeForm} />
+          </form>
+        </Card>
+      </>
+    );
+  }
+
   return (
     <>
       <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Ministry" }]} />
@@ -4997,100 +5067,43 @@ function MinistryMaintenance({
           )
         }
       >
-        <div className={formOpen ? "administration-grid" : ""}>
-          <div className="table campus-table">
-            {sortedMinistries.map((ministry) => {
-              const leadCount = (ministry.campus_leads ?? []).filter((lead) => lead.lead_user_id).length;
-              return (
-                <div className="table-row" key={ministry.id}>
-                  <span className="attention-icon blue">
-                    <Users size={19} />
-                  </span>
-                  <span className="grow">
-                    <strong>{ministry.name}</strong>
-                    <small>{ministry.description || "No description"}</small>
-                    <small>
-                      Ministry Head: {ministry.ministry_head_name || "Unassigned"} · Campus leads: {leadCount}/
-                      {campuses.length}
-                    </small>
-                  </span>
-                  <span className={`status ${ministry.is_active ? "approved" : "inactive"}`}>
-                    {ministry.is_active ? "Active" : "Inactive"}
-                  </span>
-                  <div className="campus-actions">
-                    <button
-                      className="secondary"
-                      onClick={() => {
-                        setEditing(ministry);
-                        setFormOpen(true);
-                      }}
-                    >
-                      <Pencil size={15} /> Edit
-                    </button>
-                    <button className="secondary" onClick={() => void toggleActive(ministry)}>
-                      {ministry.is_active ? "Deactivate" : "Activate"}
-                    </button>
-                  </div>
+        <div className="table campus-table">
+          {sortedMinistries.map((ministry) => {
+            const leadCount = (ministry.campus_leads ?? []).filter((lead) => lead.lead_user_id).length;
+            return (
+              <div className="table-row" key={ministry.id}>
+                <span className="attention-icon blue">
+                  <Users size={19} />
+                </span>
+                <span className="grow">
+                  <strong>{ministry.name}</strong>
+                  <small>{ministry.description || "No description"}</small>
+                  <small>
+                    Ministry Head: {ministry.ministry_head_name || "Unassigned"} · Campus leads: {leadCount}/
+                    {campuses.length}
+                  </small>
+                </span>
+                <span className={`status ${ministry.is_active ? "approved" : "inactive"}`}>
+                  {ministry.is_active ? "Active" : "Inactive"}
+                </span>
+                <div className="campus-actions">
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      setEditing(ministry);
+                      setFormOpen(true);
+                    }}
+                  >
+                    <Pencil size={15} /> Edit
+                  </button>
+                  <button className="secondary" onClick={() => void toggleActive(ministry)}>
+                    {ministry.is_active ? "Deactivate" : "Activate"}
+                  </button>
                 </div>
-              );
-            })}
-            {!ministries.length && <Empty text="No ministries have been configured." />}
-          </div>
-          {formOpen && (
-            <form className="campus-form" key={editing?.id ?? "new"} onSubmit={save}>
-              <MaintenanceFormTitle
-                icon={<Users size={19} />}
-                title={editing ? "Edit ministry" : "Add ministry"}
-                description={editing ? "Update this ministry's details and leaders." : "Create a ministry."}
-              />
-              <Field name="name" label="Ministry name" defaultValue={editing?.name} />
-              <label>
-                Description
-                <textarea name="description" rows={4} defaultValue={editing?.description} />
-              </label>
-              <label>
-                Ministry Head
-                <select name="ministryHeadUserId" defaultValue={editing?.ministry_head_user_id ?? ""}>
-                  <option value="">Unassigned</option>
-                  {ministryHeads.map((leader) => (
-                    <option key={leader.id} value={leader.id}>
-                      {leaderLabel(leader)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="campus-lead-list">
-                <span className="leader-selector-title">Campus leads</span>
-                {campusLeadsFor(editing).map((lead) => (
-                  <label className="campus-lead-row" key={lead.campusId}>
-                    <span>
-                      <Building2 size={15} />
-                      {lead.campusName}
-                    </span>
-                    <select name={`campusLead-${lead.campusId}`} defaultValue={lead.leadUserId}>
-                      <option value="">Unassigned</option>
-                      {campusLeads.map((leader) => (
-                        <option key={leader.id} value={leader.id}>
-                          {leaderLabel(leader)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
-                {!campuses.length && (
-                  <small className="form-help">Create campuses before assigning campus leads.</small>
-                )}
               </div>
-              <ActiveCheckbox label="Ministry is active" checked={editing?.is_active ?? true} />
-              <MaintenanceFormActions
-                editing={Boolean(editing)}
-                cancel={() => {
-                  setEditing(null);
-                  setFormOpen(false);
-                }}
-              />
-            </form>
-          )}
+            );
+          })}
+          {!ministries.length && <Empty text="No ministries have been configured." />}
         </div>
       </Card>
     </>
