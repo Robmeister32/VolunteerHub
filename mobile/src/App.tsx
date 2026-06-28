@@ -70,6 +70,24 @@ type View =
   | "administration"
   | "profile";
 
+type ToolsSection =
+  | "home"
+  | "volunteers"
+  | "tasks"
+  | "archived-events"
+  | "email-templates"
+  | "event-templates"
+  | "create-event"
+  | "create-events"
+  | "broadcasts"
+  | "ministry-registration"
+  | "manage-ministry-membership";
+
+type ToolsLaunch = {
+  section: ToolsSection;
+  key: number;
+};
+
 interface VolunteerOption {
   volunteer_id: string;
   first_name: string;
@@ -297,6 +315,14 @@ interface MinistryMember {
   volunteer_name?: string;
 }
 
+interface MinistryMembershipScope {
+  isAdmin: boolean;
+  ministries: Array<{ id: string; name: string }>;
+  campuses: Array<{ id: string; name: string }>;
+  ministryHeadIds: string[];
+  campusLeadScopes: Array<{ ministry_id: string; campus_id: string }>;
+}
+
 interface SystemRole {
   code: string;
   name: string;
@@ -372,6 +398,16 @@ function canUseArchivedEventTools(session: Session) {
   return hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER");
 }
 
+function canManageMinistryMembershipTools(session: Session) {
+  return (
+    hasRole(session, "ADMIN") ||
+    hasRole(session, "MINISTRY_HEAD") ||
+    hasRole(session, "EVENT_LEADER") ||
+    hasRole(session, "TEAM_LEADER") ||
+    session.ministryIds.length > 0
+  );
+}
+
 function formatRoleName(role: string) {
   if (role === "ADMIN") return "Administrator";
   return role
@@ -405,8 +441,11 @@ export function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [administrationKey, setAdministrationKey] = useState(0);
+  const [toolsLaunch, setToolsLaunch] = useState<ToolsLaunch | null>(null);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [activeTasks, setActiveTasks] = useState(0);
+  const [pendingMinistryRequests, setPendingMinistryRequests] = useState(0);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useEffect(
     () =>
@@ -441,13 +480,20 @@ export function App() {
     const tasks = await api<TaskItem[]>("/my-tasks");
     setActiveTasks(tasks.filter((task) => !["COMPLETED", "CANCELLED"].includes(task.status)).length);
   };
+  const refreshMinistryMembershipNotifications = async () => {
+    if (!session || !canManageMinistryMembershipTools(session)) return setPendingMinistryRequests(0);
+    const requests = await api<MinistryMembershipRequest[]>("/tools/ministry-membership/requests");
+    setPendingMinistryRequests(requests.length);
+  };
   useEffect(() => {
     if (!session) return;
     void refreshUnreadMessages();
     void refreshActiveTasks();
+    void refreshMinistryMembershipNotifications();
     const timer = window.setInterval(() => {
       void refreshUnreadMessages();
       void refreshActiveTasks();
+      void refreshMinistryMembershipNotifications();
     }, 30_000);
     return () => window.clearInterval(timer);
   }, [session]);
@@ -505,6 +551,15 @@ export function App() {
     void logout();
     setSession(null);
   };
+  const openMinistryMembershipApprovals = () => {
+    setToolsLaunch((current) => ({
+      section: "manage-ministry-membership",
+      key: (current?.key ?? 0) + 1
+    }));
+    setNotificationsOpen(false);
+    setMenuOpen(false);
+    setView("tools");
+  };
 
   return (
     <div className="app-shell">
@@ -557,10 +612,39 @@ export function App() {
             <Search size={18} />
             <span>Search events, people, ministries</span>
           </div>
-          <button className="icon-button" aria-label="Notifications">
-            <Bell size={19} />
-            <i />
-          </button>
+          <div className="notification-area">
+            <button
+              className="icon-button notification-button"
+              aria-label={`Notifications${pendingMinistryRequests ? `, ${pendingMinistryRequests} pending` : ""}`}
+              aria-expanded={notificationsOpen}
+              type="button"
+              onClick={() => setNotificationsOpen((open) => !open)}
+            >
+              <Bell size={19} />
+              {pendingMinistryRequests > 0 && <strong className="notification-badge">{pendingMinistryRequests}</strong>}
+            </button>
+            {notificationsOpen && (
+              <div className="notification-popover">
+                <div className="notification-popover-header">
+                  <strong>Notifications</strong>
+                </div>
+                {pendingMinistryRequests > 0 ? (
+                  <button type="button" className="notification-item" onClick={openMinistryMembershipApprovals}>
+                    <span>
+                      <strong>
+                        {pendingMinistryRequests} pending volunteer
+                        {pendingMinistryRequests === 1 ? "" : "s"}
+                      </strong>
+                      <small>Review ministry membership requests</small>
+                    </span>
+                    <ChevronRight size={17} />
+                  </button>
+                ) : (
+                  <p className="notification-empty">No items need attention.</p>
+                )}
+              </div>
+            )}
+          </div>
           <div className="avatar compact" aria-label={session.name}>
             {initials(session.name)}
           </div>
@@ -581,7 +665,14 @@ export function App() {
           {view === "events" && <Events session={session} notify={setNotice} />}
           {view === "applications" && <Applications notify={setNotice} />}
           {view === "reports" && <Reports />}
-          {view === "tools" && <Tools session={session} notify={setNotice} />}
+          {view === "tools" && (
+            <Tools
+              session={session}
+              notify={setNotice}
+              launch={toolsLaunch}
+              onMembershipRequestsChanged={refreshMinistryMembershipNotifications}
+            />
+          )}
           {view === "administration" && (hasRole(session, "ADMIN") || session.ministryIds.length > 0) && (
             <Administration key={administrationKey} session={session} navigate={setView} notify={setNotice} />
           )}
@@ -2848,20 +2939,18 @@ function Reports() {
   );
 }
 
-function Tools({ session, notify }: { session: Session; notify: (message: string) => void }) {
-  const [section, setSection] = useState<
-    | "home"
-    | "volunteers"
-    | "tasks"
-    | "archived-events"
-    | "email-templates"
-    | "event-templates"
-    | "create-event"
-    | "create-events"
-    | "broadcasts"
-    | "ministry-registration"
-    | "manage-ministry-membership"
-  >("home");
+function Tools({
+  session,
+  notify,
+  launch,
+  onMembershipRequestsChanged
+}: {
+  session: Session;
+  notify: (message: string) => void;
+  launch?: ToolsLaunch | null;
+  onMembershipRequestsChanged?: () => void;
+}) {
+  const [section, setSection] = useState<ToolsSection>("home");
   const [templateCount, setTemplateCount] = useState(0);
   const [eventTemplateCount, setEventTemplateCount] = useState(0);
   const [broadcastCount, setBroadcastCount] = useState(0);
@@ -2876,12 +2965,11 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
   const canUseOperations = canUseNonVolunteerTools(session);
   const canUseArchivedEvents = canUseArchivedEventTools(session);
   const canRegisterForMinistry = Boolean(session.volunteerId);
-  const canManageMinistryMembership =
-    hasRole(session, "ADMIN") ||
-    hasRole(session, "MINISTRY_HEAD") ||
-    hasRole(session, "EVENT_LEADER") ||
-    hasRole(session, "TEAM_LEADER") ||
-    session.ministryIds.length > 0;
+  const canManageMinistryMembership = canManageMinistryMembershipTools(session);
+
+  useEffect(() => {
+    if (launch?.section) setSection(launch.section);
+  }, [launch?.key, launch?.section]);
 
   useEffect(() => {
     if (canUseTemplates) {
@@ -2951,7 +3039,13 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
     return <MinistryRegistration notify={notify} close={() => setSection("home")} />;
   }
   if (section === "manage-ministry-membership" && canManageMinistryMembership) {
-    return <ManageMinistryMembership notify={notify} close={() => setSection("home")} />;
+    return (
+      <ManageMinistryMembership
+        notify={notify}
+        close={() => setSection("home")}
+        onRequestsChanged={onMembershipRequestsChanged}
+      />
+    );
   }
 
   return (
@@ -3225,17 +3319,27 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
   );
 }
 
-function ManageMinistryMembership({ notify, close }: { notify: (message: string) => void; close: () => void }) {
+function ManageMinistryMembership({
+  notify,
+  close,
+  onRequestsChanged
+}: {
+  notify: (message: string) => void;
+  close: () => void;
+  onRequestsChanged?: () => void;
+}) {
   const [tab, setTab] = useState<"pending" | "members">("pending");
-  const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
+  const [scope, setScope] = useState<MinistryMembershipScope | null>(null);
+  const [ministryFilter, setMinistryFilter] = useState("");
   const [campusFilter, setCampusFilter] = useState("");
   const [requests, setRequests] = useState<MinistryMembershipRequest[]>([]);
   const [members, setMembers] = useState<MinistryMember[]>([]);
   const [busyRequestId, setBusyRequestId] = useState("");
+  const filtersInitialized = useRef(false);
 
-  const loadCampuses = useCallback(() => {
-    api<{ campuses: CampusCatalogItem[] }>("/catalog")
-      .then((catalogRows) => setCampuses(catalogRows.campuses))
+  const loadScope = useCallback(() => {
+    api<MinistryMembershipScope>("/tools/ministry-membership/scope")
+      .then(setScope)
       .catch((error) => notify((error as Error).message));
   }, [notify]);
 
@@ -3246,15 +3350,61 @@ function ManageMinistryMembership({ notify, close }: { notify: (message: string)
   }, [notify]);
 
   const loadMembers = useCallback(() => {
-    const query = campusFilter ? `?campusId=${encodeURIComponent(campusFilter)}` : "";
+    const params = new URLSearchParams();
+    if (ministryFilter) params.set("ministryId", ministryFilter);
+    if (campusFilter) params.set("campusId", campusFilter);
+    const query = params.size ? `?${params.toString()}` : "";
     api<MinistryMember[]>(`/tools/ministry-membership/members${query}`)
       .then(setMembers)
       .catch((error) => notify((error as Error).message));
-  }, [campusFilter, notify]);
+  }, [campusFilter, ministryFilter, notify]);
 
-  useEffect(loadCampuses, [loadCampuses]);
+  useEffect(loadScope, [loadScope]);
   useEffect(loadRequests, [loadRequests]);
   useEffect(loadMembers, [loadMembers]);
+
+  useEffect(() => {
+    if (!scope || filtersInitialized.current) return;
+    filtersInitialized.current = true;
+    const ledMinistryIds = [...new Set(scope.campusLeadScopes.map((lead) => lead.ministry_id))];
+    const nextMinistryId =
+      scope.ministries.length === 1
+        ? scope.ministries[0]?.id
+        : !scope.isAdmin && !scope.ministryHeadIds.length && ledMinistryIds.length === 1
+          ? ledMinistryIds[0]
+          : "";
+    const ledCampusesForMinistry = nextMinistryId
+      ? scope.campusLeadScopes.filter((lead) => lead.ministry_id === nextMinistryId)
+      : scope.campusLeadScopes;
+    const canManageAllCampusesForMinistry =
+      Boolean(nextMinistryId) && (scope.isAdmin || scope.ministryHeadIds.includes(nextMinistryId));
+    const nextCampusId =
+      !canManageAllCampusesForMinistry && ledCampusesForMinistry.length === 1
+        ? ledCampusesForMinistry[0]?.campus_id
+        : "";
+    setMinistryFilter(nextMinistryId ?? "");
+    setCampusFilter(nextCampusId ?? "");
+  }, [scope]);
+
+  const campusOptions = (() => {
+    if (!scope) return [];
+    if (!ministryFilter) {
+      if (scope.isAdmin || scope.ministryHeadIds.length) return scope.campuses;
+      const campusIds = new Set(scope.campusLeadScopes.map((lead) => lead.campus_id));
+      return scope.campuses.filter((campus) => campusIds.has(campus.id));
+    }
+    if (scope.isAdmin || scope.ministryHeadIds.includes(ministryFilter)) return scope.campuses;
+    const campusIds = new Set(
+      scope.campusLeadScopes.filter((lead) => lead.ministry_id === ministryFilter).map((lead) => lead.campus_id)
+    );
+    return scope.campuses.filter((campus) => campusIds.has(campus.id));
+  })();
+
+  useEffect(() => {
+    if (campusFilter && !campusOptions.some((campus) => campus.id === campusFilter)) {
+      setCampusFilter("");
+    }
+  }, [campusFilter, campusOptions]);
 
   const decide = async (requestId: string, decision: "APPROVED" | "DENIED") => {
     setBusyRequestId(requestId);
@@ -3266,6 +3416,7 @@ function ManageMinistryMembership({ notify, close }: { notify: (message: string)
       notify(decision === "APPROVED" ? "Membership request approved." : "Membership request denied.");
       loadRequests();
       loadMembers();
+      onRequestsChanged?.();
     } catch (error) {
       notify((error as Error).message);
     } finally {
@@ -3334,10 +3485,21 @@ function ManageMinistryMembership({ notify, close }: { notify: (message: string)
           <>
             <div className="filter-bar event-filter-bar ministry-member-filter">
               <label>
+                Ministry
+                <select value={ministryFilter} onChange={(event) => setMinistryFilter(event.target.value)}>
+                  <option value="">All ministries</option>
+                  {scope?.ministries.map((ministry) => (
+                    <option key={ministry.id} value={ministry.id}>
+                      {ministry.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Campus
                 <select value={campusFilter} onChange={(event) => setCampusFilter(event.target.value)}>
                   <option value="">All campuses</option>
-                  {campuses.map((campus) => (
+                  {campusOptions.map((campus) => (
                     <option key={campus.id} value={campus.id}>
                       {campus.name}
                     </option>

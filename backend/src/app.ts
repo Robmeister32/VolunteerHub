@@ -673,6 +673,49 @@ app.get(
   })
 );
 
+app.get(
+  "/api/tools/ministry-membership/scope",
+  requireAuth,
+  route(async (req, res) => {
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    const ministries = await all<{ id: string; name: string }>(
+      `select distinct m.id, m.name
+       from ministries m
+       left join leader_ministries lm on lm.ministry_id=m.id
+       left join ministry_campus_leads mcl on mcl.ministry_id=m.id
+       where m.is_active
+         and ($1::boolean or lm.user_id=$2 or mcl.lead_user_id=$2)
+       order by m.name`,
+      [isAdmin, req.user!.id]
+    );
+    const campuses = await all<{ id: string; name: string }>(
+      `select id, name
+       from campuses
+       where is_active
+       order by name`
+    );
+    const ministryHeads = await all<{ ministry_id: string }>(
+      `select ministry_id
+       from leader_ministries
+       where user_id=$1`,
+      [req.user!.id]
+    );
+    const campusLeads = await all<{ ministry_id: string; campus_id: string }>(
+      `select ministry_id, campus_id
+       from ministry_campus_leads
+       where lead_user_id=$1`,
+      [req.user!.id]
+    );
+    res.json({
+      isAdmin,
+      ministries,
+      campuses,
+      ministryHeadIds: ministryHeads.map((row) => row.ministry_id),
+      campusLeadScopes: campusLeads
+    });
+  })
+);
+
 app.patch(
   "/api/tools/ministry-membership/requests/:requestId",
   requireAuth,
@@ -733,6 +776,8 @@ app.get(
   route(async (req, res) => {
     const campusId =
       typeof req.query.campusId === "string" && req.query.campusId ? uuid.parse(req.query.campusId) : null;
+    const ministryId =
+      typeof req.query.ministryId === "string" && req.query.ministryId ? uuid.parse(req.query.ministryId) : null;
     const isAdmin = hasRole(req.user!, "ADMIN");
     res.json(
       await all(
@@ -746,6 +791,7 @@ app.get(
          join campuses c on c.id=r.campus_id
          where r.status='APPROVED'
            and ($3::uuid is null or r.campus_id=$3)
+           and ($4::uuid is null or r.ministry_id=$4)
            and (
              $1::boolean
              or exists (
@@ -758,7 +804,7 @@ app.get(
              )
            )
          order by m.name, c.name nulls last, coalesce(u.display_name, u.email)`,
-        [isAdmin, req.user!.id, campusId]
+        [isAdmin, req.user!.id, campusId, ministryId]
       )
     );
   })
