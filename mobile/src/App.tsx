@@ -259,6 +259,7 @@ interface EventLeader {
   display_name?: string;
   email: string;
   roles: string[];
+  campus_ids?: string[];
 }
 
 interface AuditLogItem {
@@ -3614,11 +3615,15 @@ function OneOffEventCreator({
   parentLabel?: string;
   title?: string;
 }) {
-  const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[] }>({ campuses: [] });
+  const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>({
+    campuses: [],
+    ministries: []
+  });
   const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
   const [teamLeaders, setTeamLeaders] = useState<EventLeader[]>([]);
   const [locationType, setLocationType] = useState<"CAMPUS" | "OFF_SITE">("CAMPUS");
   const [campusId, setCampusId] = useState("");
+  const [participatingCampusIds, setParticipatingCampusIds] = useState<string[]>([]);
   const [location, setLocation] = useState({ address: "", latitude: "", longitude: "" });
   const [teams, setTeams] = useState<Array<EventTemplateTeam & { localId: string }>>([]);
   const [creating, setCreating] = useState(false);
@@ -3626,7 +3631,7 @@ function OneOffEventCreator({
   const newTeam = (): EventTemplateTeam & { localId: string } => ({
     localId:
       typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
-    name: "",
+    name: "Open",
     description: "",
     instructions: "",
     leaderUserIds: [],
@@ -3647,7 +3652,7 @@ function OneOffEventCreator({
 
   useEffect(() => {
     Promise.all([
-      api<{ campuses: CampusCatalogItem[] }>("/catalog"),
+      api<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>("/catalog"),
       api<{ eventLeaders: EventLeader[]; teamLeaders: EventLeader[] }>("/tools/event-template-leaders")
     ])
       .then(([catalogRows, leaderRows]) => {
@@ -3661,6 +3666,28 @@ function OneOffEventCreator({
 
   const selectedParticipantDefaults =
     locationType === "CAMPUS" && campusId ? [campusId] : session.homeCampusIds.filter(Boolean);
+  const selectedParticipantDefaultKey = selectedParticipantDefaults.join("|");
+  useEffect(() => {
+    setParticipatingCampusIds(selectedParticipantDefaults);
+  }, [selectedParticipantDefaultKey]);
+  const teamLeaderOptions = teamLeaders.filter((leader) => {
+    if (!participatingCampusIds.length) return true;
+    return leader.campus_ids?.some((campusId) => participatingCampusIds.includes(campusId));
+  });
+  const teamLeaderOptionIds = teamLeaderOptions.map((leader) => leader.id).join("|");
+  useEffect(() => {
+    const allowedIds = new Set(teamLeaderOptions.map((leader) => leader.id));
+    setTeams((current) =>
+      current.map((team) => ({
+        ...team,
+        leaderUserIds: team.leaderUserIds.filter((leaderId) => allowedIds.has(leaderId))
+      }))
+    );
+  }, [teamLeaderOptionIds]);
+  const updateTeam = (index: number, patch: Partial<EventTemplateTeam>) => {
+    setTeams((current) => current.map((team, teamIndex) => (teamIndex === index ? { ...team, ...patch } : team)));
+  };
+  const leaderName = (leader: EventLeader) => leader.display_name || leader.email;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3805,6 +3832,7 @@ function OneOffEventCreator({
           emptyLabel="Add participating campus"
           addAnotherLabel="Add another campus"
           helpText="Target volunteers from campuses close enough to participate in this one-off event."
+          onChange={setParticipatingCampusIds}
         />
         <div className="two-col">
           <DateTimeField name="startsAt" label="Start date" />
@@ -3824,7 +3852,7 @@ function OneOffEventCreator({
                 <div className="card-header">
                   <div>
                     <span className="eyebrow">Team {index + 1}</span>
-                    <h3>{team.name || "New event team"}</h3>
+                    <h3>{team.name || "Open"}</h3>
                   </div>
                   <button
                     className="secondary danger"
@@ -3834,7 +3862,23 @@ function OneOffEventCreator({
                     <X size={16} /> Remove
                   </button>
                 </div>
-                <Field name={`teamName-${index}`} label="Team name" defaultValue={team.name} />
+                <label>
+                  Ministry
+                  <select
+                    name={`teamName-${index}`}
+                    value={team.name || "Open"}
+                    onChange={(event) => updateTeam(index, { name: event.target.value })}
+                    required
+                  >
+                    <option value="Open">Open</option>
+                    {catalog.ministries.map((ministry) => (
+                      <option key={ministry.id} value={ministry.name}>
+                        {ministry.name}
+                      </option>
+                    ))}
+                  </select>
+                  <small className="form-help">Open allows any volunteer from a participating campus to join.</small>
+                </label>
                 <label>
                   Description
                   <textarea name={`teamDescription-${index}`} rows={2} defaultValue={team.description} required />
@@ -3868,15 +3912,28 @@ function OneOffEventCreator({
                   </label>
                   <span />
                 </div>
-                <LeaderSelector
-                  key={`one-off-team-leaders-${team.localId}`}
-                  leaders={teamLeaders}
-                  selectedIds={team.leaderUserIds}
-                  inputName={`teamLeaderUserIds-${index}`}
-                  title="Team leaders"
-                  searchPlaceholder="Search Administrators, Event Leaders, or Team Leaders"
-                  emptyMessage="No active team leaders are available."
-                />
+                <label>
+                  Team leader
+                  <select
+                    name={`teamLeaderUserIds-${index}`}
+                    value={team.leaderUserIds[0] ?? ""}
+                    onChange={(event) =>
+                      updateTeam(index, { leaderUserIds: event.target.value ? [event.target.value] : [] })
+                    }
+                  >
+                    <option value="">Unassigned</option>
+                    {teamLeaderOptions.map((leader) => (
+                      <option key={leader.id} value={leader.id}>
+                        {leaderName(leader)}
+                      </option>
+                    ))}
+                  </select>
+                  {!teamLeaderOptions.length && (
+                    <small className="form-help">
+                      No event leaders or team leaders match the participating campus.
+                    </small>
+                  )}
+                </label>
                 <label className="check-label">
                   <input
                     name={`teamSelfCheckinEnabled-${index}`}
@@ -6548,7 +6605,8 @@ function CampusBubbleSelector({
   title = "Home locations",
   emptyLabel = "Add home location",
   addAnotherLabel = "Add another location",
-  helpText = "My Campus includes these locations plus off-site events."
+  helpText = "My Campus includes these locations plus off-site events.",
+  onChange
 }: {
   campuses: CampusCatalogItem[];
   selectedIds: string[];
@@ -6557,6 +6615,7 @@ function CampusBubbleSelector({
   emptyLabel?: string;
   addAnotherLabel?: string;
   helpText?: string;
+  onChange?: (selectedIds: string[]) => void;
 }) {
   const [selected, setSelected] = useState(selectedIds);
   const [campusId, setCampusId] = useState("");
@@ -6564,6 +6623,7 @@ function CampusBubbleSelector({
     .map((id) => campuses.find((campus) => campus.id === id))
     .filter(Boolean) as CampusCatalogItem[];
   const availableCampuses = campuses.filter((campus) => !selected.includes(campus.id));
+  useEffect(() => onChange?.(selected), [onChange, selected]);
 
   return (
     <div className="campus-bubble-selector">

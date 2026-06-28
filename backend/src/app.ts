@@ -909,7 +909,7 @@ app.get(
       await all(
         `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
          from app_users u join app_user_roles aur on aur.user_id=u.id
-         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER')
+         where u.status='ACTIVE' and aur.role_code in ('EVENT_LEADER', 'TEAM_LEADER')
          group by u.id
          order by coalesce(display_name, email), email`
       )
@@ -1754,15 +1754,29 @@ app.get(
   route(async (_req, res) => {
     res.json({
       eventLeaders: await all(
-        `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
+        `select u.id, u.display_name, u.email,
+         array_agg(distinct aur.role_code order by aur.role_code) roles,
+         coalesce(
+           array_agg(distinct coalesce(uhc.campus_id, u.home_campus_id))
+             filter (where coalesce(uhc.campus_id, u.home_campus_id) is not null),
+           '{}'
+         ) campus_ids
          from app_users u join app_user_roles aur on aur.user_id=u.id
+         left join user_home_campuses uhc on uhc.user_id=u.id
          where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER')
          group by u.id
          order by coalesce(display_name, email), email`
       ),
       teamLeaders: await all(
-        `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
+        `select u.id, u.display_name, u.email,
+         array_agg(distinct aur.role_code order by aur.role_code) roles,
+         coalesce(
+           array_agg(distinct coalesce(uhc.campus_id, u.home_campus_id))
+             filter (where coalesce(uhc.campus_id, u.home_campus_id) is not null),
+           '{}'
+         ) campus_ids
          from app_users u join app_user_roles aur on aur.user_id=u.id
+         left join user_home_campuses uhc on uhc.user_id=u.id
          where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER')
          group by u.id
          order by coalesce(display_name, email), email`
