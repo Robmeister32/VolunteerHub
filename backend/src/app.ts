@@ -619,17 +619,12 @@ app.post(
       [body.ministryId, body.campusId]
     );
     if (!target) throw new ApiError("Select an active ministry and campus", 422);
-    const membership = await get(
-      "select 1 from user_ministry_memberships where user_id=$1 and ministry_id=$2",
-      [req.user!.id, body.ministryId]
-    );
-    if (membership) throw new ApiError("You are already a member of this ministry", 409);
     const existingRequest = await get(
       `select 1 from ministry_membership_requests
-       where user_id=$1 and ministry_id=$2`,
-      [req.user!.id, body.ministryId]
+       where user_id=$1 and ministry_id=$2 and campus_id=$3`,
+      [req.user!.id, body.ministryId, body.campusId]
     );
-    if (existingRequest) throw new ApiError("You already submitted a request for this ministry", 409);
+    if (existingRequest) throw new ApiError("You already submitted a request for this ministry at this campus", 409);
     const request = await get<{ id: string }>(
       `insert into ministry_membership_requests(user_id, volunteer_id, ministry_id, campus_id)
        values($1,$2,$3,$4) returning id`,
@@ -715,8 +710,7 @@ app.patch(
         await client.query(
           `insert into user_ministry_memberships(user_id, ministry_id, campus_id, assigned_at)
            values($1,$2,$3,now())
-           on conflict (user_id, ministry_id) do update
-           set campus_id=excluded.campus_id, assigned_at=now()`,
+           on conflict (user_id, ministry_id) do nothing`,
           [current.user_id, current.ministry_id, current.campus_id]
         );
       }
@@ -740,24 +734,25 @@ app.get(
     const isAdmin = hasRole(req.user!, "ADMIN");
     res.json(
       await all(
-        `select umm.user_id, umm.ministry_id, m.name ministry_name, umm.campus_id, c.name campus_name,
-         umm.assigned_at, coalesce(u.display_name, u.email) user_name, u.email user_email,
+        `select r.user_id, r.ministry_id, m.name ministry_name, r.campus_id, c.name campus_name,
+         coalesce(r.decided_at, r.requested_at) assigned_at, coalesce(u.display_name, u.email) user_name, u.email user_email,
          concat_ws(' ', vp.first_name, nullif(vp.middle_name, ''), vp.last_name) volunteer_name
-         from user_ministry_memberships umm
-         join app_users u on u.id=umm.user_id
+         from ministry_membership_requests r
+         join app_users u on u.id=r.user_id
          left join volunteer_profiles vp on vp.app_user_id=u.id
-         join ministries m on m.id=umm.ministry_id
-         left join campuses c on c.id=umm.campus_id
-         where ($3::uuid is null or umm.campus_id=$3)
+         join ministries m on m.id=r.ministry_id
+         join campuses c on c.id=r.campus_id
+         where r.status='APPROVED'
+           and ($3::uuid is null or r.campus_id=$3)
            and (
              $1::boolean
              or exists (
                select 1 from leader_ministries lm
-               where lm.user_id=$2 and lm.ministry_id=umm.ministry_id
+               where lm.user_id=$2 and lm.ministry_id=r.ministry_id
              )
              or exists (
                select 1 from ministry_campus_leads mcl
-               where mcl.lead_user_id=$2 and mcl.ministry_id=umm.ministry_id and mcl.campus_id=umm.campus_id
+               where mcl.lead_user_id=$2 and mcl.ministry_id=r.ministry_id and mcl.campus_id=r.campus_id
              )
            )
          order by m.name, c.name nulls last, coalesce(u.display_name, u.email)`,

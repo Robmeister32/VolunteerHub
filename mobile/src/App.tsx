@@ -3020,6 +3020,8 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
     ministries: []
   });
   const [requests, setRequests] = useState<MinistryMembershipRequest[]>([]);
+  const [selectedCampusId, setSelectedCampusId] = useState("");
+  const [selectedMinistryId, setSelectedMinistryId] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(() => {
@@ -3035,19 +3037,26 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
 
   useEffect(load, [load]);
 
-  const blockedMinistryIds = new Set(
+  const blockedMinistryIdsForCampus = new Set(
     requests
-      .filter((request) => request.status !== "CANCELLED")
+      .filter((request) => request.status !== "CANCELLED" && request.campus_id === selectedCampusId)
       .map((request) => request.ministry_id)
   );
-  const availableMinistries = catalog.ministries.filter((ministry) => !blockedMinistryIds.has(ministry.id));
+  const availableMinistries = catalog.ministries.filter(
+    (ministry) => !selectedCampusId || !blockedMinistryIdsForCampus.has(ministry.id)
+  );
+
+  useEffect(() => {
+    if (selectedMinistryId && !availableMinistries.some((ministry) => ministry.id === selectedMinistryId)) {
+      setSelectedMinistryId("");
+    }
+  }, [availableMinistries, selectedMinistryId]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const formData = new FormData(form);
-    const ministryId = String(formData.get("ministryId") ?? "");
-    const campusId = String(formData.get("campusId") ?? "");
+    const ministryId = selectedMinistryId;
+    const campusId = selectedCampusId;
     if (!ministryId || !campusId) return notify("Select a ministry and campus.");
     setSubmitting(true);
     try {
@@ -3057,6 +3066,8 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
       });
       notify("Ministry membership request submitted.");
       form.reset();
+      setSelectedCampusId("");
+      setSelectedMinistryId("");
       load();
     } catch (error) {
       notify((error as Error).message);
@@ -3077,22 +3088,16 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
         <MaintenanceFormTitle
           icon={<UserCheck />}
           title="Request membership"
-          description="One pending or approved request is allowed per ministry."
+          description="One request is allowed for each ministry and campus."
         />
         <label>
-          Ministry
-          <select name="ministryId" required>
-            <option value="">Select a ministry</option>
-            {availableMinistries.map((ministry) => (
-              <option key={ministry.id} value={ministry.id}>
-                {ministry.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
           Campus
-          <select name="campusId" required>
+          <select
+            name="campusId"
+            value={selectedCampusId}
+            onChange={(event) => setSelectedCampusId(event.target.value)}
+            required
+          >
             <option value="">Select a campus</option>
             {catalog.campuses.map((campus) => (
               <option key={campus.id} value={campus.id}>
@@ -3101,8 +3106,34 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
             ))}
           </select>
         </label>
+        <label>
+          Ministry
+          <select
+            name="ministryId"
+            value={selectedMinistryId}
+            onChange={(event) => setSelectedMinistryId(event.target.value)}
+            required
+          >
+            <option value="">
+              {availableMinistries.length ? "Select a ministry" : "All ministries have been requested for this campus"}
+            </option>
+            {availableMinistries.map((ministry) => (
+              <option key={ministry.id} value={ministry.id}>
+                {ministry.name}
+              </option>
+            ))}
+          </select>
+          {!availableMinistries.length && (
+            <small className="form-help">
+              Select another campus to request this ministry in a different location.
+            </small>
+          )}
+        </label>
         <div className="card-actions">
-          <button className="primary" disabled={submitting || !availableMinistries.length || !catalog.campuses.length}>
+          <button
+            className="primary"
+            disabled={submitting || !selectedCampusId || !selectedMinistryId || !catalog.campuses.length}
+          >
             {submitting ? "Submitting..." : "Submit request"}
           </button>
           <button className="secondary" type="button" onClick={close}>
@@ -3257,7 +3288,7 @@ function ManageMinistryMembership({ notify, close }: { notify: (message: string)
             {members.length ? (
               <div className="table campus-table ministry-membership-list">
                 {members.map((member) => (
-                  <div className="table-row" key={`${member.user_id}-${member.ministry_id}`}>
+                  <div className="table-row" key={`${member.user_id}-${member.ministry_id}-${member.campus_id}`}>
                     <span className="grow">
                       <strong>{member.volunteer_name || member.user_name}</strong>
                       <small>
@@ -6265,10 +6296,10 @@ function ActiveCheckbox({ label, checked }: { label: string; checked: boolean })
 function MaintenanceFormActions({ editing, cancel }: { editing: boolean; cancel: () => void }) {
   return (
     <div className="card-actions">
-      <button className="primary">{editing ? "Save changes" : "Create record"}</button>
       <button className="secondary" type="button" onClick={cancel}>
         Cancel
       </button>
+      <button className="primary">{editing ? "Save changes" : "Create record"}</button>
     </div>
   );
 }
