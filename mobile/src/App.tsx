@@ -670,6 +670,7 @@ export function App() {
               session={session}
               notify={setNotice}
               launch={toolsLaunch}
+              pendingMinistryRequests={pendingMinistryRequests}
               onMembershipRequestsChanged={refreshMinistryMembershipNotifications}
             />
           )}
@@ -2943,11 +2944,13 @@ function Tools({
   session,
   notify,
   launch,
+  pendingMinistryRequests = 0,
   onMembershipRequestsChanged
 }: {
   session: Session;
   notify: (message: string) => void;
   launch?: ToolsLaunch | null;
+  pendingMinistryRequests?: number;
   onMembershipRequestsChanged?: () => void;
 }) {
   const [section, setSection] = useState<ToolsSection>(launch?.section ?? "home");
@@ -3068,6 +3071,7 @@ function Tools({
             icon={<Users />}
             title="Manage Ministry Membership"
             description="Approve ministry requests and review members by campus."
+            count={pendingMinistryRequests}
             onClick={() => setSection("manage-ministry-membership")}
           />
         )}
