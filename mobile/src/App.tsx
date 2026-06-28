@@ -762,45 +762,30 @@ function Dashboard({
       <VolunteerHome session={session} events={events} refreshEvents={loadEvents} navigate={navigate} notify={notify} />
     );
   return (
-    <>
-      <div className="stats">
-        <Stat icon={<CalendarDays />} label="Upcoming events" value={stats.upcomingEvents} accent="teal" />
-        <Stat icon={<Clock3 />} label="Pending assignments" value={stats.pendingAssignments} accent="amber" />
-        <Stat icon={<UserCheck />} label="New applications" value={stats.pendingApplications} accent="blue" />
-        <Stat icon={<ShieldCheck />} label="Expiring soon" value={stats.expiringCompliance} accent="rose" />
-      </div>
-      <div className="content-grid">
-        <Card title="Upcoming staffing" action={<button onClick={() => navigate("events")}>View events</button>}>
-          <div className="event-list">
-            {events.slice(0, 4).map((event) => (
-              <StaffingRow key={event.id} event={event} />
-            ))}
-          </div>
-        </Card>
-        <Card title="Needs attention">
-          <div className="attention-list">
-            <Attention
-              icon={<UserCheck />}
-              tone="amber"
-              title={`${stats.pendingApplications ?? 0} applications waiting`}
-              subtitle="Review volunteer applications"
-            />
-            <Attention
-              icon={<Clock3 />}
-              tone="blue"
-              title={`${stats.pendingAssignments ?? 0} signup requests`}
-              subtitle="Leaders can approve or reject"
-            />
-            <Attention
-              icon={<ShieldCheck />}
-              tone="rose"
-              title={`${stats.expiringCompliance ?? 0} requirements expiring`}
-              subtitle="Within the next 60 days"
-            />
-          </div>
-        </Card>
-      </div>
-    </>
+    <div className="content-grid">
+      <Card title="Needs attention">
+        <div className="attention-list">
+          <Attention
+            icon={<UserCheck />}
+            tone="amber"
+            title={`${stats.pendingApplications ?? 0} applications waiting`}
+            subtitle="Review volunteer applications"
+          />
+          <Attention
+            icon={<Clock3 />}
+            tone="blue"
+            title={`${stats.pendingAssignments ?? 0} signup requests`}
+            subtitle="Leaders can approve or reject"
+          />
+          <Attention
+            icon={<ShieldCheck />}
+            tone="rose"
+            title={`${stats.expiringCompliance ?? 0} requirements expiring`}
+            subtitle="Within the next 60 days"
+          />
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -5687,6 +5672,7 @@ function SystemRoleMaintenance({ notify, close }: { notify: (m: string) => void;
       });
       notify(editing ? "System role updated." : "System role created.");
       setEditing(null);
+      setFormOpen(false);
       void load();
     } catch (error) {
       notify((error as Error).message);
@@ -6295,42 +6281,11 @@ function ActiveCheckbox({ label, checked }: { label: string; checked: boolean })
 }
 function MaintenanceFormActions({ editing, cancel }: { editing: boolean; cancel: () => void }) {
   return (
-    <div className="card-actions">
+    <div className="card-actions">      
+      <button className="primary">{editing ? "Save changes" : "Create record"}</button>
       <button className="secondary" type="button" onClick={cancel}>
         Cancel
       </button>
-      <button className="primary">{editing ? "Save changes" : "Create record"}</button>
-    </div>
-  );
-}
-function Stat({ icon, label, value = 0, accent }: { icon: ReactNode; label: string; value?: number; accent: string }) {
-  return (
-    <div className="stat">
-      <span className={`stat-icon ${accent}`}>{icon}</span>
-      <div>
-        <strong>{value}</strong>
-        <small>{label}</small>
-      </div>
-      <ChevronRight size={17} />
-    </div>
-  );
-}
-function StaffingRow({ event }: { event: EventItem }) {
-  return (
-    <div className="staff-row">
-      <div className="calendar-block small">
-        <strong>{new Date(event.starts_at).getDate()}</strong>
-        <span>{new Date(event.starts_at).toLocaleString("en", { month: "short" })}</span>
-      </div>
-      <span className="grow">
-        <strong>{event.name}</strong>
-        <small>
-          {event.groups.length} teams · {event.confirmed_count}/{event.required_count} staffed
-        </small>
-      </span>
-      <span className={event.confirmed_count < event.required_count ? "shortage" : "complete"}>
-        {event.confirmed_count < event.required_count ? `${event.required_count - event.confirmed_count} open` : "Full"}
-      </span>
     </div>
   );
 }
