@@ -193,18 +193,6 @@ interface MinistryCampusLead {
   lead_name?: string;
 }
 
-interface MinistryRole {
-  id: string;
-  ministry_id: string;
-  ministry_name: string;
-  name: string;
-  description?: string;
-  minimum_age: number;
-  maximum_age?: number;
-  requires_admin_approval: boolean;
-  is_active: boolean;
-}
-
 interface EmailTemplate {
   id: string;
   name: string;
@@ -373,6 +361,14 @@ function canCreateBroadcasts(session: Session) {
 }
 
 function canCreateOneOffEvents(session: Session) {
+  return hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER");
+}
+
+function canUseNonVolunteerTools(session: Session) {
+  return session.roles.some((role) => role !== "VOLUNTEER");
+}
+
+function canUseArchivedEventTools(session: Session) {
   return hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER");
 }
 
@@ -2398,7 +2394,15 @@ function EventDrawer({
   );
 }
 
-function VolunteerDirectoryMaintenance({ notify, close }: { notify: (message: string) => void; close: () => void }) {
+function VolunteerDirectoryMaintenance({
+  notify,
+  close,
+  parentLabel = "Administration"
+}: {
+  notify: (message: string) => void;
+  close: () => void;
+  parentLabel?: string;
+}) {
   const [people, setPeople] = useState<VolunteerDirectoryPerson[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [searching, setSearching] = useState(false);
@@ -2421,9 +2425,9 @@ function VolunteerDirectoryMaintenance({ notify, close }: { notify: (message: st
 
   return (
     <>
-      <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Volunteer directory" }]} />
+      <Breadcrumbs items={[{ label: parentLabel, onClick: close }, { label: "Volunteer directory" }]} />
       <PageTitle
-        eyebrow="Administration"
+        eyebrow={parentLabel}
         title="Volunteer directory"
         description="Search volunteer profiles and review campus, access roles, ministries, and service activity."
       />
@@ -2847,6 +2851,9 @@ function Reports() {
 function Tools({ session, notify }: { session: Session; notify: (message: string) => void }) {
   const [section, setSection] = useState<
     | "home"
+    | "volunteers"
+    | "tasks"
+    | "archived-events"
     | "email-templates"
     | "event-templates"
     | "create-event"
@@ -2858,9 +2865,16 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
   const [templateCount, setTemplateCount] = useState(0);
   const [eventTemplateCount, setEventTemplateCount] = useState(0);
   const [broadcastCount, setBroadcastCount] = useState(0);
+  const [toolCounts, setToolCounts] = useState({
+    volunteers: 0,
+    tasks: 0,
+    archivedEvents: 0
+  });
   const canUseTemplates = canManageEmailTemplates(session);
   const canUseBroadcasts = canCreateBroadcasts(session);
   const canUseOneOffEvents = canCreateOneOffEvents(session);
+  const canUseOperations = canUseNonVolunteerTools(session);
+  const canUseArchivedEvents = canUseArchivedEventTools(session);
   const canRegisterForMinistry = Boolean(session.volunteerId);
   const canManageMinistryMembership =
     hasRole(session, "ADMIN") ||
@@ -2889,8 +2903,35 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
         })
         .catch((error) => notify((error as Error).message));
     }
-  }, [canUseTemplates, canUseBroadcasts, notify]);
+    if (canUseOperations || canUseArchivedEvents) {
+      Promise.allSettled([
+        canUseOperations ? api<VolunteerDirectoryPerson[]>("/administration/volunteers") : Promise.resolve([]),
+        canUseOperations ? api<AdminTaskItem[]>("/administration/tasks") : Promise.resolve([]),
+        canUseArchivedEvents ? api<ArchivedEvent[]>("/administration/archived-events") : Promise.resolve([])
+      ]).then((results) => {
+        const [volunteers, tasks, archivedEvents] = results.map((result) =>
+          result.status === "fulfilled" ? result.value : []
+        );
+        setToolCounts({
+          volunteers: volunteers.length,
+          tasks: tasks.length,
+          archivedEvents: archivedEvents.length
+        });
+        const failed = results.find((result) => result.status === "rejected");
+        if (failed) notify((failed.reason as Error).message);
+      });
+    }
+  }, [canUseTemplates, canUseBroadcasts, canUseOperations, canUseArchivedEvents, notify]);
 
+  if (section === "volunteers" && canUseOperations) {
+    return <VolunteerDirectoryMaintenance notify={notify} close={() => setSection("home")} parentLabel="Tools" />;
+  }
+  if (section === "tasks" && canUseOperations) {
+    return <TaskAssignmentMaintenance notify={notify} close={() => setSection("home")} parentLabel="Tools" />;
+  }
+  if (section === "archived-events" && canUseArchivedEvents) {
+    return <ArchivedEventMaintenance notify={notify} close={() => setSection("home")} parentLabel="Tools" />;
+  }
   if (section === "email-templates" && canUseTemplates) {
     return <EmailTemplateManager notify={notify} close={() => setSection("home")} />;
   }
@@ -2938,6 +2979,42 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
           />
         )}
       </div>
+      {(canUseOperations || canUseArchivedEvents) && (
+        <>
+          <div className="tools-section-divider">
+            <span>Operations</span>
+          </div>
+          <div className="maintenance-card-grid tools-card-grid">
+            {canUseOperations && (
+              <MaintenanceCard
+                icon={<Users />}
+                title="Volunteer Directory"
+                description="Search volunteers and review their home campus, access roles, ministries, and status."
+                count={toolCounts.volunteers}
+                onClick={() => setSection("volunteers")}
+              />
+            )}
+            {canUseOperations && (
+              <MaintenanceCard
+                icon={<ClipboardList />}
+                title="Assign Tasks"
+                description="Assign operational tasks to volunteers serving with an active event team."
+                count={toolCounts.tasks}
+                onClick={() => setSection("tasks")}
+              />
+            )}
+            {canUseArchivedEvents && (
+              <MaintenanceCard
+                icon={<CalendarDays />}
+                title="Archived Events"
+                description="Review completed, cancelled, and removed events or restore them to Active or Draft."
+                count={toolCounts.archivedEvents}
+                onClick={() => setSection("archived-events")}
+              />
+            )}
+          </div>
+        </>
+      )}
       <div className="maintenance-card-grid tools-card-grid">
         {canUseOneOffEvents && (
           <MaintenanceCard
@@ -2992,9 +3069,9 @@ function Tools({ session, notify }: { session: Session; notify: (message: string
         !canManageMinistryMembership &&
         !canUseOneOffEvents &&
         !canUseTemplates &&
-        !canUseBroadcasts && (
-        <Empty text="No tools are available for your current role." />
-      )}
+        !canUseBroadcasts &&
+        !canUseOperations &&
+        !canUseArchivedEvents && <Empty text="No tools are available for your current role." />}
     </>
   );
 }
@@ -3109,9 +3186,7 @@ function MinistryRegistration({ notify, close }: { notify: (message: string) => 
             ))}
           </select>
           {!availableMinistries.length && (
-            <small className="form-help">
-              Select another campus to request this ministry in a different location.
-            </small>
+            <small className="form-help">Select another campus to request this ministry in a different location.</small>
           )}
         </label>
         <div className="card-actions">
@@ -4375,53 +4450,33 @@ function Administration({
   notify: (m: string) => void;
 }) {
   const [section, setSection] = useState<
-    | "home"
-    | "volunteers"
-    | "tasks"
-    | "campuses"
-    | "ministries"
-    | "roles"
-    | "system-roles"
-    | "role-assignments"
-    | "archived-events"
-    | "audit"
+    "home" | "campuses" | "ministries" | "system-roles" | "role-assignments" | "audit"
   >("home");
   const [counts, setCounts] = useState({
-    volunteers: 0,
-    tasks: 0,
     campuses: 0,
     ministries: 0,
-    roles: 0,
     systemRoles: 0,
     assignments: 0,
-    archivedEvents: 0,
     audit: 0
   });
 
   useEffect(() => {
     if (!hasRole(session, "ADMIN")) return;
     Promise.allSettled([
-      api<VolunteerDirectoryPerson[]>("/administration/volunteers"),
-      api<AdminTaskItem[]>("/administration/tasks"),
       api<Campus[]>("/administration/campuses"),
       api<Ministry[]>("/administration/ministries"),
-      api<MinistryRole[]>("/administration/roles"),
       api<SystemRole[]>("/administration/system-roles"),
       api<UserRoleAssignment[]>("/administration/role-assignments"),
-      api<ArchivedEvent[]>("/administration/archived-events"),
       api<AuditLogItem[]>("/administration/audit-logs")
     ]).then((results) => {
-      const [volunteers, tasks, campuses, ministries, roles, systemRoles, assignments, archivedEvents, audit] =
-        results.map((result) => (result.status === "fulfilled" ? result.value : []));
+      const [campuses, ministries, systemRoles, assignments, audit] = results.map((result) =>
+        result.status === "fulfilled" ? result.value : []
+      );
       setCounts({
-        volunteers: volunteers.length,
-        tasks: tasks.length,
         campuses: campuses.length,
         ministries: ministries.length,
-        roles: roles.length,
         systemRoles: systemRoles.length,
         assignments: assignments.length,
-        archivedEvents: archivedEvents.length,
         audit: audit.length
       });
       const failed = results.find((result) => result.status === "rejected");
@@ -4432,18 +4487,12 @@ function Administration({
   if (!hasRole(session, "ADMIN"))
     return <MinistryMaintenance session={session} notify={notify} close={() => navigate("serve")} />;
 
-  if (section === "volunteers")
-    return <VolunteerDirectoryMaintenance notify={notify} close={() => setSection("home")} />;
-  if (section === "tasks") return <TaskAssignmentMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "campuses") return <CampusMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "ministries")
     return <MinistryMaintenance session={session} notify={notify} close={() => setSection("home")} />;
-  if (section === "roles") return <RoleMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "system-roles") return <SystemRoleMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "role-assignments")
     return <RoleAssignmentMaintenance notify={notify} close={() => setSection("home")} />;
-  if (section === "archived-events")
-    return <ArchivedEventMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "audit") return <AuditLogMaintenance notify={notify} close={() => setSection("home")} />;
 
   return (
@@ -4461,20 +4510,6 @@ function Administration({
       </div>
       <div className="maintenance-card-grid">
         <MaintenanceCard
-          icon={<Users />}
-          title="Volunteer Directory"
-          description="Search volunteers and review their home campus, access roles, ministries, and status."
-          count={counts.volunteers}
-          onClick={() => setSection("volunteers")}
-        />
-        <MaintenanceCard
-          icon={<ClipboardList />}
-          title="Assign Tasks"
-          description="Assign operational tasks to volunteers serving with an active event team."
-          count={counts.tasks}
-          onClick={() => setSection("tasks")}
-        />
-        <MaintenanceCard
           icon={<Building2 />}
           title="Campus"
           description="Maintain church locations, addresses, map coordinates, and active status."
@@ -4487,13 +4522,6 @@ function Administration({
           description="Maintain ministries, ministry heads, and campus lead assignments."
           count={counts.ministries}
           onClick={() => setSection("ministries")}
-        />
-        <MaintenanceCard
-          icon={<ShieldCheck />}
-          title="Ministry Roles"
-          description="Maintain ministry roles, age rules, and administrator approval requirements."
-          count={counts.roles}
-          onClick={() => setSection("roles")}
         />
         <MaintenanceCard
           icon={<Settings />}
@@ -4510,13 +4538,6 @@ function Administration({
           onClick={() => setSection("role-assignments")}
         />
         <MaintenanceCard
-          icon={<CalendarDays />}
-          title="Archived Events"
-          description="Review completed, cancelled, and removed events or restore them to Active or Draft."
-          count={counts.archivedEvents}
-          onClick={() => setSection("archived-events")}
-        />
-        <MaintenanceCard
           icon={<ClipboardList />}
           title="Audit"
           description="Search activity logs for login, registration, creation, updates, volunteering, withdrawals, and messaging."
@@ -4528,7 +4549,15 @@ function Administration({
   );
 }
 
-function TaskAssignmentMaintenance({ notify, close }: { notify: (m: string) => void; close: () => void }) {
+function TaskAssignmentMaintenance({
+  notify,
+  close,
+  parentLabel = "Administration"
+}: {
+  notify: (m: string) => void;
+  close: () => void;
+  parentLabel?: string;
+}) {
   const [tasks, setTasks] = useState<AdminTaskItem[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [selectedEventId, setSelectedEventId] = useState("");
@@ -4608,9 +4637,9 @@ function TaskAssignmentMaintenance({ notify, close }: { notify: (m: string) => v
 
   return (
     <>
-      <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Assign Tasks" }]} />
+      <Breadcrumbs items={[{ label: parentLabel, onClick: close }, { label: "Assign Tasks" }]} />
       <PageTitle
-        eyebrow="Administration"
+        eyebrow={parentLabel}
         title="Assign Tasks"
         description="Create operational tasks for volunteers serving with an active event team."
       />
@@ -4755,7 +4784,15 @@ function TaskAssignmentMaintenance({ notify, close }: { notify: (m: string) => v
   );
 }
 
-function ArchivedEventMaintenance({ notify, close }: { notify: (m: string) => void; close: () => void }) {
+function ArchivedEventMaintenance({
+  notify,
+  close,
+  parentLabel = "Administration"
+}: {
+  notify: (m: string) => void;
+  close: () => void;
+  parentLabel?: string;
+}) {
   const [events, setEvents] = useState<ArchivedEvent[]>([]);
   const [editing, setEditing] = useState<ArchivedEvent | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -4796,9 +4833,9 @@ function ArchivedEventMaintenance({ notify, close }: { notify: (m: string) => vo
   );
   return (
     <>
-      <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Archived Events" }]} />
+      <Breadcrumbs items={[{ label: parentLabel, onClick: close }, { label: "Archived Events" }]} />
       <PageTitle
-        eyebrow="Administration"
+        eyebrow={parentLabel}
         title="Archived Events"
         description="Review and restore events archived within the last 18 months."
       />
@@ -5465,187 +5502,6 @@ function MinistryMaintenance({
   );
 }
 
-function RoleMaintenance({ notify, close }: { notify: (m: string) => void; close: () => void }) {
-  const [roles, setRoles] = useState<MinistryRole[]>([]);
-  const [ministries, setMinistries] = useState<Ministry[]>([]);
-  const [editing, setEditing] = useState<MinistryRole | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
-
-  const load = () =>
-    Promise.all([api<MinistryRole[]>("/administration/roles"), api<Ministry[]>("/administration/ministries")])
-      .then(([roleRows, ministryRows]) => {
-        setRoles(roleRows);
-        setMinistries(ministryRows);
-      })
-      .catch((error) => notify((error as Error).message));
-
-  useEffect(() => {
-    void load();
-  }, []);
-
-  const payloadFor = (role: MinistryRole) => ({
-    ministryId: role.ministry_id,
-    name: role.name,
-    description: role.description || null,
-    minimumAge: Number(role.minimum_age),
-    maximumAge: role.maximum_age === undefined || role.maximum_age === null ? null : Number(role.maximum_age),
-    requiresAdminApproval: role.requires_admin_approval,
-    isActive: role.is_active
-  });
-
-  const save = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const data = Object.fromEntries(new FormData(event.currentTarget));
-    const body = {
-      ministryId: data.ministryId,
-      name: data.name,
-      description: String(data.description ?? "").trim() || null,
-      minimumAge: Number(data.minimumAge),
-      maximumAge: String(data.maximumAge ?? "").trim() ? Number(data.maximumAge) : null,
-      requiresAdminApproval: data.requiresAdminApproval === "on",
-      isActive: data.isActive === "on"
-    };
-    try {
-      await api(editing ? `/administration/roles/${editing.id}` : "/administration/roles", {
-        method: editing ? "PATCH" : "POST",
-        body: JSON.stringify(body)
-      });
-      notify(editing ? "Role updated." : "Role created.");
-      setEditing(null);
-      setFormOpen(false);
-      void load();
-    } catch (error) {
-      notify((error as Error).message);
-    }
-  };
-
-  const toggleActive = async (role: MinistryRole) => {
-    try {
-      await api(`/administration/roles/${role.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ ...payloadFor(role), isActive: !role.is_active })
-      });
-      notify(`${role.name} ${role.is_active ? "deactivated" : "activated"}.`);
-      void load();
-    } catch (error) {
-      notify((error as Error).message);
-    }
-  };
-
-  return (
-    <>
-      <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Roles" }]} />
-      <PageTitle
-        eyebrow="Administration"
-        title="Role maintenance"
-        description="Maintain ministry roles, eligibility ages, and approval requirements."
-      />
-      <Card
-        title="Roles"
-        action={
-          <button
-            onClick={() => {
-              setEditing(null);
-              setFormOpen(true);
-            }}
-          >
-            <Plus size={16} /> Add role
-          </button>
-        }
-      >
-        <div className={formOpen ? "administration-grid" : ""}>
-          <div className="table campus-table">
-            {roles.map((role) => (
-              <div className="table-row" key={role.id}>
-                <span className="attention-icon amber">
-                  <ShieldCheck size={19} />
-                </span>
-                <span className="grow">
-                  <strong>{role.name}</strong>
-                  <small>
-                    {role.ministry_name} · Minimum age {role.minimum_age}
-                    {role.maximum_age === null || role.maximum_age === undefined ? "" : `–${role.maximum_age}`}
-                  </small>
-                </span>
-                <span className={`status ${role.is_active ? "approved" : "inactive"}`}>
-                  {role.is_active ? "Active" : "Inactive"}
-                </span>
-                <div className="campus-actions">
-                  <button
-                    className="secondary"
-                    onClick={() => {
-                      setEditing(role);
-                      setFormOpen(true);
-                    }}
-                  >
-                    <Pencil size={15} /> Edit
-                  </button>
-                  <button className="secondary" onClick={() => void toggleActive(role)}>
-                    {role.is_active ? "Deactivate" : "Activate"}
-                  </button>
-                </div>
-              </div>
-            ))}
-            {!roles.length && <Empty text="No ministry roles have been configured." />}
-          </div>
-          {formOpen && (
-            <form className="campus-form" key={editing?.id ?? "new"} onSubmit={save}>
-              <MaintenanceFormTitle
-                icon={<ShieldCheck size={19} />}
-                title={editing ? "Edit role" : "Add role"}
-                description={editing ? "Update this role's rules." : "Create a role for a ministry."}
-              />
-              <label>
-                Ministry
-                <select name="ministryId" defaultValue={editing?.ministry_id} required>
-                  <option value="">Select a ministry</option>
-                  {ministries
-                    .filter((ministry) => ministry.is_active || ministry.id === editing?.ministry_id)
-                    .map((ministry) => (
-                      <option key={ministry.id} value={ministry.id}>
-                        {ministry.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <Field name="name" label="Role name" defaultValue={editing?.name} />
-              <label>
-                Description
-                <textarea name="description" rows={3} defaultValue={editing?.description} />
-              </label>
-              <div className="two-col">
-                <Field name="minimumAge" label="Minimum age" type="number" defaultValue={editing?.minimum_age ?? 0} />
-                <OptionalField
-                  name="maximumAge"
-                  label="Maximum age"
-                  type="number"
-                  defaultValue={editing?.maximum_age}
-                />
-              </div>
-              <label className="check-label">
-                <input
-                  name="requiresAdminApproval"
-                  type="checkbox"
-                  defaultChecked={editing?.requires_admin_approval ?? false}
-                />
-                Requires administrator approval
-              </label>
-              <ActiveCheckbox label="Role is active" checked={editing?.is_active ?? true} />
-              <MaintenanceFormActions
-                editing={Boolean(editing)}
-                cancel={() => {
-                  setEditing(null);
-                  setFormOpen(false);
-                }}
-              />
-            </form>
-          )}
-        </div>
-      </Card>
-    </>
-  );
-}
-
 function SystemRoleMaintenance({ notify, close }: { notify: (m: string) => void; close: () => void }) {
   const [roles, setRoles] = useState<SystemRole[]>([]);
   const [editing, setEditing] = useState<SystemRole | null>(null);
@@ -6281,7 +6137,7 @@ function ActiveCheckbox({ label, checked }: { label: string; checked: boolean })
 }
 function MaintenanceFormActions({ editing, cancel }: { editing: boolean; cancel: () => void }) {
   return (
-    <div className="card-actions">      
+    <div className="card-actions">
       <button className="primary">{editing ? "Save changes" : "Create record"}</button>
       <button className="secondary" type="button" onClick={cancel}>
         Cancel

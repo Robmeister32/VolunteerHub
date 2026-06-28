@@ -692,9 +692,10 @@ app.patch(
           ministry_id: string;
           campus_id: string;
           status: string;
-        }>("select id, user_id, ministry_id, campus_id, status from ministry_membership_requests where id=$1 for update", [
-          requestId
-        ])
+        }>(
+          "select id, user_id, ministry_id, campus_id, status from ministry_membership_requests where id=$1 for update",
+          [requestId]
+        )
       ).rows[0];
       if (!current) throw new ApiError("Membership request not found", 404);
       if (current.status !== "PENDING") throw new ApiError("This membership request has already been decided", 409);
@@ -730,7 +731,8 @@ app.get(
   "/api/tools/ministry-membership/members",
   requireAuth,
   route(async (req, res) => {
-    const campusId = typeof req.query.campusId === "string" && req.query.campusId ? uuid.parse(req.query.campusId) : null;
+    const campusId =
+      typeof req.query.campusId === "string" && req.query.campusId ? uuid.parse(req.query.campusId) : null;
     const isAdmin = hasRole(req.user!, "ADMIN");
     res.json(
       await all(
@@ -1829,8 +1831,9 @@ app.patch(
 app.get(
   "/api/administration/archived-events",
   requireAuth,
-  requireRole("ADMIN"),
-  route(async (_req, res) => {
+  requireRole("ADMIN", "EVENT_LEADER"),
+  route(async (req, res) => {
+    const isAdmin = hasRole(req.user!, "ADMIN");
     res.json(
       await all(
         `select e.id,e.name,e.description,e.starts_at,e.ends_at,e.status,e.address,e.latitude,e.longitude,
@@ -1839,8 +1842,10 @@ app.get(
          from events e join campuses c on c.id=e.campus_id
          left join app_users u on u.id=any(e.event_leader_user_ids)
          where e.status not in ('ACTIVE','DRAFT') and e.ends_at >= now() - interval '18 months'
+           and ($1::boolean or $2::uuid=any(e.event_leader_user_ids))
          group by e.id,c.name
-         order by e.starts_at desc`
+         order by e.starts_at desc`,
+        [isAdmin, req.user!.id]
       )
     );
   })
@@ -1944,13 +1949,20 @@ app.get(
 app.patch(
   "/api/administration/events/:eventId/status",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER"),
   route(async (req, res) => {
     const eventId = uuid.parse(req.params.eventId);
     const status = eventStatus.parse(req.body.status);
-    const event = await get<{ id: string }>("update events set status=$1 where id=$2 returning id", [status, eventId]);
-    if (!event) return void res.status(404).json({ error: "Event not found" });
-    await audit(req.user!.id, "EVENT_STATUS_UPDATED", "event", event.id, { status });
+    const existing = await get<{ id: string; event_leader_user_ids: string[] }>(
+      "select id,event_leader_user_ids from events where id=$1",
+      [eventId]
+    );
+    if (!existing) return void res.status(404).json({ error: "Event not found" });
+    if (!hasRole(req.user!, "ADMIN") && !existing.event_leader_user_ids.includes(req.user!.id)) {
+      throw new ApiError("Outside your event scope", 403);
+    }
+    await run("update events set status=$1 where id=$2", [status, eventId]);
+    await audit(req.user!.id, "EVENT_STATUS_UPDATED", "event", existing.id, { status });
     res.json({ message: "Event status updated" });
   })
 );
@@ -2273,7 +2285,7 @@ app.patch(
 app.get(
   "/api/administration/volunteers",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER", "TEAM_LEADER", "MINISTRY_HEAD"),
   route(async (req, res) => {
     const search = typeof req.query.q === "string" ? z.string().trim().max(160).parse(req.query.q) : "";
     const marker = search.slice(0, 1);
@@ -2457,7 +2469,7 @@ async function taskScope(taskId: string) {
 app.post(
   "/api/tasks",
   requireAuth,
-  requireRole("ADMIN", "EVENT_LEADER"),
+  requireRole("ADMIN", "EVENT_LEADER", "TEAM_LEADER", "MINISTRY_HEAD"),
   route(async (req, res) => {
     const body = taskInput.parse(req.body);
     const group = await get<{
@@ -2515,10 +2527,13 @@ app.post(
 app.patch(
   "/api/administration/tasks/:id",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER", "TEAM_LEADER", "MINISTRY_HEAD"),
   route(async (req, res) => {
     const id = uuid.parse(req.params.id);
     const body = taskInput.parse(req.body);
+    const scopedTask = await taskScope(id);
+    if (!scopedTask) throw new ApiError("Task not found", 404);
+    if (!canManageTask(req.user!, scopedTask)) throw new ApiError("Outside your event team scope", 403);
     const result = await transaction(async (client) => {
       const existing = (
         await client.query<{ event_group_id: string; status: string }>(
@@ -2537,13 +2552,21 @@ app.patch(
       ).rows[0]!.count;
 
       const group = (
-        await client.query<{ event_id: string }>(
-          `select eg.event_id from event_groups eg join events e on e.id=eg.event_id
+        await client.query<{ event_id: string; leader_user_ids: string[]; event_leader_user_ids: string[] }>(
+          `select eg.event_id,eg.leader_user_ids,e.event_leader_user_ids
+           from event_groups eg join events e on e.id=eg.event_id
            where eg.id=$1 and eg.is_active and e.status='ACTIVE'`,
           [body.eventGroupId]
         )
       ).rows[0];
       if (!group) throw new ApiError("Active event team not found", 404);
+      if (
+        !hasRole(req.user!, "ADMIN") &&
+        !group.leader_user_ids.includes(req.user!.id) &&
+        !group.event_leader_user_ids.includes(req.user!.id)
+      ) {
+        throw new ApiError("Outside your event team scope", 403);
+      }
       const groupChanged = existing.event_group_id !== body.eventGroupId;
       if (groupChanged && activeClaims > 0)
         throw new ApiError("Remove active claims before changing the event group", 409);
@@ -2587,8 +2610,9 @@ app.patch(
 app.get(
   "/api/administration/tasks",
   requireAuth,
-  requireRole("ADMIN"),
-  route(async (_req, res) => {
+  requireRole("ADMIN", "EVENT_LEADER", "TEAM_LEADER", "MINISTRY_HEAD"),
+  route(async (req, res) => {
+    const isAdmin = hasRole(req.user!, "ADMIN");
     res.json(
       await all(
         `select t.id,t.event_id,t.event_group_id,t.title,t.description,t.location,t.required_volunteers,t.priority,t.status,
@@ -2608,8 +2632,11 @@ app.get(
          left join task_recipients tr on tr.task_id=t.id
          left join task_claims tc on tc.task_id=t.id
          left join volunteer_profiles vp on vp.id=tc.volunteer_id
+         where ($1::boolean or $2::uuid=any(eg.leader_user_ids) or $2::uuid=any(e.event_leader_user_ids)
+           or t.created_by_user_id=$2)
          group by t.id,e.id,eg.id,c.id,u.id
-         order by t.created_at desc`
+         order by t.created_at desc`,
+        [isAdmin, req.user!.id]
       )
     );
   })
