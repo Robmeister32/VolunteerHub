@@ -3358,9 +3358,13 @@ function ManageMinistryMembership({
       .catch((error) => notify((error as Error).message));
   }, [campusFilter, ministryFilter, notify]);
 
-  useEffect(loadScope, [loadScope]);
+  useEffect(() => {
+    if (tab === "members") loadScope();
+  }, [loadScope, tab]);
   useEffect(loadRequests, [loadRequests]);
-  useEffect(loadMembers, [loadMembers]);
+  useEffect(() => {
+    if (tab === "members") loadMembers();
+  }, [loadMembers, tab]);
 
   useEffect(() => {
     if (!scope || filtersInitialized.current) return;
@@ -3414,7 +3418,7 @@ function ManageMinistryMembership({
       });
       notify(decision === "APPROVED" ? "Membership request approved." : "Membership request denied.");
       loadRequests();
-      loadMembers();
+      if (tab === "members") loadMembers();
       onRequestsChanged?.();
     } catch (error) {
       notify((error as Error).message);
