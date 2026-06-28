@@ -909,7 +909,7 @@ app.get(
       await all(
         `select u.id, u.display_name, u.email, array_agg(aur.role_code order by aur.role_code) roles
          from app_users u join app_user_roles aur on aur.user_id=u.id
-         where u.status='ACTIVE' and aur.role_code in ('EVENT_LEADER', 'TEAM_LEADER')
+         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER')
          group by u.id
          order by coalesce(display_name, email), email`
       )

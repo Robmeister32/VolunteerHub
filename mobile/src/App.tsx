@@ -3672,7 +3672,8 @@ function OneOffEventCreator({
   }, [selectedParticipantDefaultKey]);
   const teamLeaderOptions = teamLeaders.filter((leader) => {
     if (!participatingCampusIds.length) return true;
-    return leader.campus_ids?.some((campusId) => participatingCampusIds.includes(campusId));
+    if (!leader.campus_ids?.length) return true;
+    return leader.campus_ids.some((campusId) => participatingCampusIds.includes(campusId));
   });
   const teamLeaderOptionIds = teamLeaderOptions.map((leader) => leader.id).join("|");
   useEffect(() => {
