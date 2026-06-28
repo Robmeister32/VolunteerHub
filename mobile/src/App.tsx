@@ -6308,7 +6308,7 @@ function MaintenanceCard({
         <strong>{title}</strong>
         <small>{description}</small>
       </span>
-      {count !== undefined && <span className="maintenance-count">{count}</span>}
+      {count !== undefined && count > 0 && <span className="maintenance-count">{count}</span>}
       <ChevronRight size={19} />
     </button>
   );

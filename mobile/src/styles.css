@@ -2208,10 +2208,10 @@ select:focus {
   min-width: 30px;
   height: 30px;
   padding: 0 8px;
-  color: var(--teal);
+  color: #7a4e00;
   font-size: 0.75rem;
   font-weight: 700;
-  background: #e9f2ef;
+  background: #f8d66d;
   border-radius: 20px;
 }
 .tools-card-grid {
