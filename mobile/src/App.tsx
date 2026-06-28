@@ -2950,7 +2950,7 @@ function Tools({
   launch?: ToolsLaunch | null;
   onMembershipRequestsChanged?: () => void;
 }) {
-  const [section, setSection] = useState<ToolsSection>("home");
+  const [section, setSection] = useState<ToolsSection>(launch?.section ?? "home");
   const [templateCount, setTemplateCount] = useState(0);
   const [eventTemplateCount, setEventTemplateCount] = useState(0);
   const [broadcastCount, setBroadcastCount] = useState(0);
@@ -2972,24 +2972,25 @@ function Tools({
   }, [launch?.key, launch?.section]);
 
   useEffect(() => {
+    if (section !== "home") return;
     if (canUseTemplates) {
       api<EmailTemplate[]>("/tools/email-templates")
         .then((templates) => {
           setTemplateCount(templates.length);
         })
-        .catch((error) => notify((error as Error).message));
+        .catch(() => undefined);
       api<EventTemplate[]>("/tools/event-templates")
         .then((templates) => {
           setEventTemplateCount(templates.length);
         })
-        .catch((error) => notify((error as Error).message));
+        .catch(() => undefined);
     }
     if (canUseBroadcasts) {
       api<Array<Record<string, unknown>>>("/broadcasts")
         .then((broadcasts) => {
           setBroadcastCount(broadcasts.length);
         })
-        .catch((error) => notify((error as Error).message));
+        .catch(() => undefined);
     }
     if (canUseOperations || canUseArchivedEvents) {
       Promise.allSettled([
@@ -3005,11 +3006,9 @@ function Tools({
           tasks: tasks.length,
           archivedEvents: archivedEvents.length
         });
-        const failed = results.find((result) => result.status === "rejected");
-        if (failed) notify((failed.reason as Error).message);
       });
     }
-  }, [canUseTemplates, canUseBroadcasts, canUseOperations, canUseArchivedEvents, notify]);
+  }, [section, canUseTemplates, canUseBroadcasts, canUseOperations, canUseArchivedEvents]);
 
   if (section === "volunteers" && canUseOperations) {
     return <VolunteerDirectoryMaintenance notify={notify} close={() => setSection("home")} parentLabel="Tools" />;
