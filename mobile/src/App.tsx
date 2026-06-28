@@ -78,8 +78,6 @@ type ToolsSection =
   | "archived-events"
   | "email-templates"
   | "event-templates"
-  | "create-event"
-  | "create-events"
   | "broadcasts"
   | "ministry-registration"
   | "manage-ministry-membership";
@@ -668,13 +666,7 @@ export function App() {
           {view === "messages" && <MyMessages notify={setNotice} onUnreadChange={refreshUnreadMessages} />}
           {view === "events" && <Events session={session} notify={setNotice} />}
           {view === "create-events" && (
-            <OneOffEventCreator
-              session={session}
-              notify={setNotice}
-              close={() => setView("events")}
-              parentLabel="Events"
-              title="Create Events"
-            />
+            <CreateEventsPage session={session} notify={setNotice} close={() => setView("events")} />
           )}
           {view === "applications" && <Applications notify={setNotice} />}
           {view === "reports" && <Reports />}
@@ -2977,7 +2969,6 @@ function Tools({
   });
   const canUseTemplates = canManageEmailTemplates(session);
   const canUseBroadcasts = canCreateBroadcasts(session);
-  const canUseOneOffEvents = canCreateOneOffEvents(session);
   const canUseOperations = canUseNonVolunteerTools(session);
   const canUseArchivedEvents = canUseArchivedEventTools(session);
   const canRegisterForMinistry = Boolean(session.volunteerId);
@@ -3040,12 +3031,6 @@ function Tools({
   }
   if (section === "event-templates" && canUseTemplates) {
     return <EventTemplateManager notify={notify} close={() => setSection("home")} />;
-  }
-  if (section === "create-event" && canUseOneOffEvents) {
-    return <OneOffEventCreator session={session} notify={notify} close={() => setSection("home")} />;
-  }
-  if (section === "create-events" && canUseTemplates) {
-    return <TemplateEventCreator notify={notify} close={() => setSection("home")} />;
   }
   if (section === "broadcasts" && canUseBroadcasts) {
     return <Broadcasts session={session} notify={notify} close={() => setSection("home")} />;
@@ -3126,22 +3111,6 @@ function Tools({
         </>
       )}
       <div className="maintenance-card-grid tools-card-grid">
-        {canUseOneOffEvents && (
-          <MaintenanceCard
-            icon={<MapPin />}
-            title="Create Event"
-            description="Create single instance events."
-            onClick={() => setSection("create-event")}
-          />
-        )}
-        {canUseTemplates && (
-          <MaintenanceCard
-            icon={<Plus />}
-            title="Create Events Using Template"
-            description="Generate one or more draft event instances and their teams from an event template."
-            onClick={() => setSection("create-events")}
-          />
-        )}
         {canUseBroadcasts && (
           <MaintenanceCard
             icon={<Megaphone />}
@@ -3177,7 +3146,6 @@ function Tools({
       )}
       {!canRegisterForMinistry &&
         !canManageMinistryMembership &&
-        !canUseOneOffEvents &&
         !canUseTemplates &&
         !canUseBroadcasts &&
         !canUseOperations &&
@@ -3584,6 +3552,55 @@ function ManageMinistryMembership({
   );
 }
 
+function CreateEventsPage({
+  session,
+  notify,
+  close
+}: {
+  session: Session;
+  notify: (message: string) => void;
+  close: () => void;
+}) {
+  const [mode, setMode] = useState<"home" | "single" | "template">("home");
+  const canUseTemplates = canManageEmailTemplates(session);
+
+  if (mode === "single") {
+    return (
+      <OneOffEventCreator session={session} notify={notify} close={() => setMode("home")} parentLabel="Create Events" />
+    );
+  }
+  if (mode === "template" && canUseTemplates) {
+    return <TemplateEventCreator notify={notify} close={() => setMode("home")} parentLabel="Create Events" />;
+  }
+
+  return (
+    <>
+      <Breadcrumbs items={[{ label: "Events", onClick: close }, { label: "Create Events" }]} />
+      <PageTitle
+        eyebrow="Event"
+        title="Create Events"
+        description="Create one event from scratch or generate events from a reusable template."
+      />
+      <div className="maintenance-card-grid tools-card-grid">
+        <MaintenanceCard
+          icon={<MapPin />}
+          title="Create Event"
+          description="Create a single draft event and define its teams."
+          onClick={() => setMode("single")}
+        />
+        {canUseTemplates && (
+          <MaintenanceCard
+            icon={<Plus />}
+            title="Create Events Using Template"
+            description="Generate one or more draft event instances and their teams from an event template."
+            onClick={() => setMode("template")}
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
 function OneOffEventCreator({
   session,
   notify,
@@ -3905,7 +3922,15 @@ const scheduleIntervals = [
   { value: "EVERY_8_WEEKS", label: "Every 8 weeks" }
 ] as const;
 
-function TemplateEventCreator({ notify, close }: { notify: (message: string) => void; close: () => void }) {
+function TemplateEventCreator({
+  notify,
+  close,
+  parentLabel = "Tools"
+}: {
+  notify: (message: string) => void;
+  close: () => void;
+  parentLabel?: string;
+}) {
   const [templates, setTemplates] = useState<EventTemplate[]>([]);
   const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[] }>({ campuses: [] });
   const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
@@ -3973,7 +3998,7 @@ function TemplateEventCreator({ notify, close }: { notify: (message: string) => 
 
   return (
     <>
-      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Create events using template" }]} />
+      <Breadcrumbs items={[{ label: parentLabel, onClick: close }, { label: "Create Events Using Template" }]} />
       <PageTitle
         eyebrow="Scheduling"
         title="Create Events Using Template"
