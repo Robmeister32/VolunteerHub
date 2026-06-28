@@ -1054,7 +1054,12 @@ function Events({
     });
     return () => controller.abort();
   }, [load, notify]);
-  const visibleEvents = events.filter((event) => locationScope === "ALL" || eventMatchesHomeCampus(event, session));
+  const visibleEvents = events.filter(
+    (event) =>
+      locationScope === "ALL" ||
+      (!serveMode && event.status === "DRAFT" && canCreateOneOffEvents(session)) ||
+      eventMatchesHomeCampus(event, session)
+  );
   const groupedEvents = [...visibleEvents]
     .sort((first, second) => new Date(first.starts_at).getTime() - new Date(second.starts_at).getTime())
     .reduce<Array<{ key: string; label: string; items: EventItem[] }>>((groups, event) => {
@@ -3734,6 +3739,7 @@ function OneOffEventCreator({
         })
       });
       notify("Event created as Draft.");
+      eventSearchCache.clear();
       close();
     } catch (error) {
       notify((error as Error).message);
@@ -4046,6 +4052,7 @@ function TemplateEventCreator({
         })
       });
       notify(`${result.createdCount} event${result.createdCount === 1 ? "" : "s"} created as draft.`);
+      eventSearchCache.clear();
       close();
     } catch (error) {
       notify((error as Error).message);
