@@ -3367,8 +3367,18 @@ function ManageMinistryMembership({
   }, [loadMembers, tab]);
 
   useEffect(() => {
-    if (!scope || filtersInitialized.current) return;
+    if (tab !== "members" || filtersInitialized.current) return;
+    if (!scope && !members.length) return;
     filtersInitialized.current = true;
+    const memberMinistryIds = [...new Set(members.map((member) => member.ministry_id))];
+    const memberCampusIds = [
+      ...new Set(members.map((member) => member.campus_id).filter((campusId): campusId is string => Boolean(campusId)))
+    ];
+    if (!scope) {
+      setMinistryFilter(memberMinistryIds.length === 1 ? memberMinistryIds[0] : "");
+      setCampusFilter(memberCampusIds.length === 1 ? memberCampusIds[0] : "");
+      return;
+    }
     const ledMinistryIds = [...new Set(scope.campusLeadScopes.map((lead) => lead.ministry_id))];
     const nextMinistryId =
       scope.ministries.length === 1
@@ -3387,20 +3397,42 @@ function ManageMinistryMembership({
         : "";
     setMinistryFilter(nextMinistryId ?? "");
     setCampusFilter(nextCampusId ?? "");
-  }, [scope]);
+  }, [members, scope, tab]);
+
+  const ministryOptions = (() => {
+    const options = new Map<string, string>();
+    scope?.ministries.forEach((ministry) => options.set(ministry.id, ministry.name));
+    members.forEach((member) => options.set(member.ministry_id, member.ministry_name));
+    return [...options.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  })();
 
   const campusOptions = (() => {
-    if (!scope) return [];
+    const memberCampusOptions = members
+      .filter((member) => !ministryFilter || member.ministry_id === ministryFilter)
+      .reduce((options, member) => {
+        if (member.campus_id && member.campus_name) options.set(member.campus_id, member.campus_name);
+        return options;
+      }, new Map<string, string>());
+    const mergeMemberCampuses = (campuses: Array<{ id: string; name: string }>) => {
+      const options = new Map(campuses.map((campus) => [campus.id, campus.name]));
+      memberCampusOptions.forEach((name, id) => options.set(id, name));
+      return [...options.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((left, right) => left.name.localeCompare(right.name));
+    };
+    if (!scope) return mergeMemberCampuses([]);
     if (!ministryFilter) {
-      if (scope.isAdmin || scope.ministryHeadIds.length) return scope.campuses;
+      if (scope.isAdmin || scope.ministryHeadIds.length) return mergeMemberCampuses(scope.campuses);
       const campusIds = new Set(scope.campusLeadScopes.map((lead) => lead.campus_id));
-      return scope.campuses.filter((campus) => campusIds.has(campus.id));
+      return mergeMemberCampuses(scope.campuses.filter((campus) => campusIds.has(campus.id)));
     }
-    if (scope.isAdmin || scope.ministryHeadIds.includes(ministryFilter)) return scope.campuses;
+    if (scope.isAdmin || scope.ministryHeadIds.includes(ministryFilter)) return mergeMemberCampuses(scope.campuses);
     const campusIds = new Set(
       scope.campusLeadScopes.filter((lead) => lead.ministry_id === ministryFilter).map((lead) => lead.campus_id)
     );
-    return scope.campuses.filter((campus) => campusIds.has(campus.id));
+    return mergeMemberCampuses(scope.campuses.filter((campus) => campusIds.has(campus.id)));
   })();
 
   useEffect(() => {
@@ -3491,7 +3523,7 @@ function ManageMinistryMembership({
                 Ministry
                 <select value={ministryFilter} onChange={(event) => setMinistryFilter(event.target.value)}>
                   <option value="">All ministries</option>
-                  {scope?.ministries.map((ministry) => (
+                  {ministryOptions.map((ministry) => (
                     <option key={ministry.id} value={ministry.id}>
                       {ministry.name}
                     </option>
