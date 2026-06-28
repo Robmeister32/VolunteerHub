@@ -63,6 +63,7 @@ type View =
   | "tasks"
   | "messages"
   | "events"
+  | "create-events"
   | "applications"
   | "broadcasts"
   | "reports"
@@ -529,7 +530,10 @@ export function App() {
           ["tasks", ClipboardList, "My Tasks"],
           ["messages", MessageSquareText, "My Messages"],
           ...(hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER")
-            ? ([["events", CalendarDays, "Events"]] as const)
+            ? ([
+                ["events", CalendarDays, "Events"],
+                ["create-events", Plus, "Create Events", "child"]
+              ] as const)
             : []),
           ...(hasRole(session, "ADMIN") ? ([["applications", UserCheck, "Applications"]] as const) : []),
           ["tools", Wrench, "Tools"],
@@ -578,10 +582,10 @@ export function App() {
           </div>
         </div>
         <nav>
-          {nav.map(([id, Icon, label]) => (
+          {nav.map(([id, Icon, label, itemType]) => (
             <button
               key={id}
-              className={view === id ? "active" : ""}
+              className={[view === id ? "active" : "", itemType === "child" ? "sub-nav" : ""].filter(Boolean).join(" ")}
               onClick={() => {
                 if (id === "administration") setAdministrationKey((key) => key + 1);
                 setView(id);
@@ -663,6 +667,15 @@ export function App() {
           {view === "tasks" && <MyTasks notify={setNotice} />}
           {view === "messages" && <MyMessages notify={setNotice} onUnreadChange={refreshUnreadMessages} />}
           {view === "events" && <Events session={session} notify={setNotice} />}
+          {view === "create-events" && (
+            <OneOffEventCreator
+              session={session}
+              notify={setNotice}
+              close={() => setView("events")}
+              parentLabel="Events"
+              title="Create Events"
+            />
+          )}
           {view === "applications" && <Applications notify={setNotice} />}
           {view === "reports" && <Reports />}
           {view === "tools" && (
@@ -3574,11 +3587,15 @@ function ManageMinistryMembership({
 function OneOffEventCreator({
   session,
   notify,
-  close
+  close,
+  parentLabel = "Tools",
+  title = "Create Event"
 }: {
   session: Session;
   notify: (message: string) => void;
   close: () => void;
+  parentLabel?: string;
+  title?: string;
 }) {
   const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[] }>({ campuses: [] });
   const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
@@ -3682,8 +3699,8 @@ function OneOffEventCreator({
 
   return (
     <>
-      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Create event" }]} />
-      <PageTitle eyebrow="Event" title="Create Event" />
+      <Breadcrumbs items={[{ label: parentLabel, onClick: close }, { label: title }]} />
+      <PageTitle eyebrow="Event" title={title} />
       <form className="card template-event-create-form" onSubmit={submit}>
         <MaintenanceFormTitle
           icon={<MapPin />}

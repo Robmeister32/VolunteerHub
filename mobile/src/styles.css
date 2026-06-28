@@ -170,6 +170,15 @@ nav button.active {
   background: #ffffff16;
   color: #fff;
 }
+nav button.sub-nav {
+  margin-left: 24px;
+  padding: 9px 10px;
+  font-size: 0.9rem;
+}
+nav button.sub-nav svg {
+  width: 16px;
+  height: 16px;
+}
 .nav-badge,
 .message-badge {
   display: grid;
