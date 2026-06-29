@@ -1756,6 +1756,14 @@ app.post(
       [id, isAdmin, req.user!.id]
     );
     if (!template) throw new ApiError("Event template not found", 404);
+    const ministryLeadRows = await all<{ ministry_name: string; lead_user_id: string }>(
+      `select m.name ministry_name, mcl.lead_user_id
+       from ministries m
+       join ministry_campus_leads mcl on mcl.ministry_id=m.id
+       where mcl.campus_id=$1 and m.is_active`,
+      [body.campusId]
+    );
+    const ministryLeadIds = new Map(ministryLeadRows.map((row) => [row.ministry_name, row.lead_user_id]));
     const intervalDays = eventTemplateIntervalDays(body.interval);
     const created = await transaction(async (client) => {
       const eventIds: string[] = [];
@@ -1784,6 +1792,7 @@ app.post(
         eventIds.push(event.id);
 
         for (const team of template.teams) {
+          const ministryLeadId = team.name === "Open" ? undefined : ministryLeadIds.get(team.name);
           await client.query(
             `insert into event_groups(event_id,name,description,instructions,leader_user_ids,required_volunteer_count,
               signup_policy,movement_policy,self_checkin_enabled,is_active)
@@ -1793,7 +1802,7 @@ app.post(
               team.name,
               team.description,
               team.instructions,
-              [],
+              ministryLeadId ? [ministryLeadId] : [],
               team.requiredVolunteerCount,
               team.signupPolicy,
               team.movementPolicy,
