@@ -9,6 +9,7 @@
   --ink: #173333;
   --muted: #71807d;
   --teal: #176b63;
+  --mint: #e0f0eb;
   --teal-dark: #123f3d;
   --cream: #f8f4e8;
   --line: #dfe6e1;
@@ -2265,11 +2266,11 @@ select:focus {
   height: 30px;
   padding: 0 8px;
   /* color: #7a4e00; */
-  color: var(--cream);
+  color: var(--teal);
   font-size: 0.75rem;
   font-weight: 700;
   /* background: #f8d66d; */
-  background: var(--teal);
+  background: var(--mint);
 
   border-radius: 20px;
 }
