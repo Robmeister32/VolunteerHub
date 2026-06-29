@@ -4346,6 +4346,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
 
   const archiveTemplate = async () => {
     if (!selected || !selected.can_edit) return;
+    if (!window.confirm("Archiving Event\n\nAre you sure?")) return;
     setSaving(true);
     try {
       await api(`/tools/event-templates/${selected.id}/archive`, { method: "PATCH" });
@@ -4362,7 +4363,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
 
   const deleteTemplate = async () => {
     if (!selected || !selected.can_edit) return;
-    if (!window.confirm(`Delete ${selected.name}? This permanently removes the template from the database.`)) return;
+    if (!window.confirm("Deleting Event\n\nAre you sure?")) return;
     setSaving(true);
     try {
       await api(`/tools/event-templates/${selected.id}`, { method: "DELETE" });
