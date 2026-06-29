@@ -2503,6 +2503,27 @@ select:focus {
   border-radius: 9px;
   background: #fff8e9;
 }
+.template-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: -2px;
+}
+.template-action-button {
+  width: 34px;
+  height: 34px;
+  color: var(--teal);
+  border: 1px solid var(--line);
+}
+.template-action-button.danger {
+  color: #a75c4b;
+}
+.template-save-actions {
+  flex: 1;
+}
+.template-save-actions .primary {
+  width: 100%;
+}
 .email-variable-panel {
   display: grid;
   gap: 12px;

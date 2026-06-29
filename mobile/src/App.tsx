@@ -10,6 +10,7 @@ import {
   type ReactNode
 } from "react";
 import {
+  Archive,
   Bell,
   Building2,
   CalendarDays,
@@ -36,7 +37,8 @@ import {
   UserCheck,
   Users,
   Wrench,
-  X
+  X,
+  Trash2
 } from "lucide-react";
 import {
   api,
@@ -4485,6 +4487,32 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                 This shared event template is read-only. Create a new template to customize it.
               </div>
             )}
+            {!readOnly && selected && (
+              <div className="template-form-actions">
+                {selected.is_active && (
+                  <button
+                    className="icon-button template-action-button"
+                    type="button"
+                    disabled={saving}
+                    aria-label="Archive template"
+                    title="Archive template"
+                    onClick={archiveTemplate}
+                  >
+                    <Archive size={17} />
+                  </button>
+                )}
+                <button
+                  className="icon-button template-action-button danger"
+                  type="button"
+                  disabled={saving}
+                  aria-label="Delete template"
+                  title="Delete template"
+                  onClick={deleteTemplate}
+                >
+                  <Trash2 size={17} />
+                </button>
+              </div>
+            )}
             <label>
               Template name
               <input
@@ -4660,20 +4688,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                   />
                   Active template
                 </label>
-                <div className="card-actions">
-                  {selected && selected.is_active && (
-                    <button className="secondary" type="button" disabled={saving} onClick={archiveTemplate}>
-                      Archive
-                    </button>
-                  )}
-                  {selected && (
-                    <button className="secondary danger" type="button" disabled={saving} onClick={deleteTemplate}>
-                      Delete
-                    </button>
-                  )}
-                  <button className="secondary" type="button" onClick={startNew}>
-                    Clear
-                  </button>
+                <div className="card-actions template-save-actions">
                   <button className="primary" disabled={saving}>
                     {saving ? "Saving..." : selected ? "Save changes" : "Create template"}
                   </button>
