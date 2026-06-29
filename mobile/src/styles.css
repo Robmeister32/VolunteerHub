@@ -1330,6 +1330,48 @@ main {
   transform: translateY(-2px);
   box-shadow: 0 13px 30px #24433e12;
 }
+.application-review-card {
+  width: 100%;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.application-review-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 13px 30px #24433e12;
+}
+.application-review-card .card-header {
+  align-items: center;
+}
+.application-review-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+.screener-score-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 1.25fr);
+  gap: 12px;
+  align-items: start;
+}
+.screener-score-legend {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #ead69a;
+  border-radius: 8px;
+  background: #fff8df;
+  color: #664b16;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+.screener-score-legend strong {
+  color: var(--ink);
+  font-size: 0.75rem;
+}
 .ministry {
   font-size: 0.68rem;
   text-transform: uppercase;
@@ -2142,6 +2184,10 @@ main {
   color: var(--muted);
   font-size: 0.7rem;
   line-height: 1.45;
+}
+.important-note {
+  color: #8a5e12;
+  font-weight: 700;
 }
 form {
   display: flex;
@@ -3268,6 +3314,9 @@ form.audit-search {
   .opportunity-grid,
   .events-grid,
   .application-grid {
+    grid-template-columns: 1fr;
+  }
+  .screener-score-row {
     grid-template-columns: 1fr;
   }
   .hero-card {

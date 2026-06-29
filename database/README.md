@@ -32,6 +32,9 @@ Run the files in order using the Supabase SQL Editor:
 19. `019_event_participating_campuses.sql`
 20. `020_audit_log_modules.sql`
 21. `021_ministry_membership_leads.sql`
+22. `022_ministry_membership_requests.sql`
+23. `023_ministry_request_per_campus.sql`
+24. `024_screener_scores.sql`
 
 The migrations create a private `volunteerhub` schema. Do not add it to Supabase's **Exposed schemas** list. The FastAPI service should connect directly to Postgres using a dedicated database role and perform authorization after verifying Firebase ID tokens.
 

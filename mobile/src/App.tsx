@@ -199,10 +199,23 @@ interface Ministry {
   id: string;
   name: string;
   description?: string;
+  screener_score?: number;
   ministry_head_user_id?: string;
   ministry_head_name?: string;
   campus_leads?: MinistryCampusLead[];
   is_active: boolean;
+}
+
+interface VolunteerApplication {
+  id: string;
+  first_name?: string;
+  middle_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  application_status?: string;
+  screener_score?: number;
+  created_at?: string;
 }
 
 interface MinistryCampusLead {
@@ -2707,17 +2720,99 @@ function Applications({
   notify: (m: string) => void;
   onApplicationsChanged?: () => void;
 }) {
-  const [items, setItems] = useState<Array<Record<string, string | number>>>([]);
-  const load = () => api<Array<Record<string, string | number>>>("/applications").then(setItems);
+  const [items, setItems] = useState<VolunteerApplication[]>([]);
+  const [selectedApplication, setSelectedApplication] = useState<VolunteerApplication | null>(null);
+  const load = () => api<VolunteerApplication[]>("/applications").then(setItems);
   useEffect(() => {
     void load();
   }, []);
-  const decide = async (id: string, status: string) => {
-    await api(`/applications/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+  const decide = async (id: string, status: "APPROVED" | "REJECTED", screenerScore?: number) => {
+    await api(`/applications/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, screenerScore })
+    });
     notify(`Application ${status.toLowerCase()}.`);
     await load();
+    setSelectedApplication(null);
     onApplicationsChanged?.();
   };
+
+  if (selectedApplication) {
+    const applicantName = personName(
+      selectedApplication.first_name,
+      selectedApplication.middle_name,
+      selectedApplication.last_name
+    );
+    const approve = async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const score = Number(new FormData(event.currentTarget).get("screenerScore"));
+      await decide(selectedApplication.id, "APPROVED", score);
+    };
+    return (
+      <>
+        <Breadcrumbs
+          items={[{ label: "Applications", onClick: () => setSelectedApplication(null) }, { label: applicantName }]}
+        />
+        <PageTitle
+          eyebrow="Registration"
+          title="Review application"
+          description="Enter the background screening score before approving this volunteer."
+        />
+        <form className="card campus-form application-review-form" onSubmit={approve}>
+          <MaintenanceFormTitle
+            icon={<UserCheck />}
+            title={applicantName}
+            description="Lower screener scores indicate better vetting results."
+          />
+          <div className="application-review-meta">
+            <span>{selectedApplication.email}</span>
+            {selectedApplication.phone && <span>{selectedApplication.phone}</span>}
+            {selectedApplication.application_status && (
+              <span className={`status ${selectedApplication.application_status.toLowerCase()}`}>
+                {selectedApplication.application_status}
+              </span>
+            )}
+          </div>
+          <div className="screener-score-row">
+            <label>
+              Screener score
+              <input
+                name="screenerScore"
+                type="number"
+                min={0}
+                max={10}
+                step={1}
+                defaultValue={selectedApplication.screener_score ?? ""}
+                required
+              />
+            </label>
+            <div className="screener-score-legend" aria-label="Screener score legend">
+              <strong>Score cheat sheet</strong>
+              <span>Felony: 10</span>
+              <span>Misdemeanor A: 5</span>
+              <span>Misdemeanor B: 4</span>
+              <span>Misdemeanor C: 3</span>
+              <span>Infraction/Violation: 1</span>
+              <span>No Record: 0</span>
+            </div>
+          </div>
+          <div className="card-actions">
+            <button className="primary" type="submit">
+              <Check size={16} /> Approve application
+            </button>
+            <button
+              className="secondary danger"
+              type="button"
+              onClick={() => decide(selectedApplication.id, "REJECTED")}
+            >
+              <X size={16} /> Reject
+            </button>
+          </div>
+        </form>
+      </>
+    );
+  }
+
   return (
     <>
       <PageTitle
@@ -2727,20 +2822,21 @@ function Applications({
       />
       <div className="application-grid">
         {items.map((p) => (
-          <Card key={p.id} title={personName(p.first_name, p.middle_name, p.last_name)}>
+          <button
+            className="card application-review-card"
+            key={p.id}
+            type="button"
+            onClick={() => setSelectedApplication(p)}
+          >
+            <div className="card-header">
+              <h3>{personName(p.first_name, p.middle_name, p.last_name)}</h3>
+              <ChevronRight size={18} />
+            </div>
             <p>{p.email}</p>
             <p className="meta">
               <Clock3 size={15} /> Status: {p.application_status}
             </p>
-            <div className="card-actions">
-              <button className="primary" onClick={() => decide(String(p.id), "APPROVED")}>
-                <Check size={16} /> Approve
-              </button>
-              <button className="secondary danger" onClick={() => decide(String(p.id), "REJECTED")}>
-                <X size={16} /> Reject
-              </button>
-            </div>
-          </Card>
+          </button>
         ))}
       </div>
       {!items.length && <Empty text="No applications need review." />}
@@ -5899,6 +5995,7 @@ function MinistryMaintenance({
   const payloadFor = (ministry: Ministry) => ({
     name: ministry.name,
     description: ministry.description || null,
+    screenerScore: ministry.screener_score ?? 10,
     ministryHeadUserId: ministry.ministry_head_user_id || null,
     campusLeads: (ministry.campus_leads ?? []).map((lead) => ({
       campusId: lead.campus_id,
@@ -5926,6 +6023,7 @@ function MinistryMaintenance({
     const body = {
       name: data.name,
       description: String(data.description ?? "").trim() || null,
+      screenerScore: Number(data.screenerScore),
       ministryHeadUserId: String(data.ministryHeadUserId ?? "").trim() || null,
       campusLeads: campuses.map((campus) => ({
         campusId: campus.id,
@@ -5992,6 +6090,21 @@ function MinistryMaintenance({
             <label>
               Description
               <textarea name="description" rows={4} defaultValue={editing?.description} />
+            </label>
+            <label>
+              Screener score
+              <input
+                name="screenerScore"
+                type="number"
+                min={0}
+                max={10}
+                step={1}
+                defaultValue={editing?.screener_score ?? ""}
+                required
+              />
+              <small className="form-help important-note">
+                IMPORTANT NOTE: Please ask your admin the appropriate screener score for this Ministry.
+              </small>
             </label>
             <label>
               Ministry Head
@@ -6070,6 +6183,7 @@ function MinistryMaintenance({
                     Ministry Head: {ministry.ministry_head_name || "Unassigned"} · Campus leads: {leadCount}/
                     {campuses.length}
                   </small>
+                  <small>Screener score: {ministry.screener_score ?? 10}</small>
                 </span>
                 <span className={`status ${ministry.is_active ? "approved" : "inactive"}`}>
                   {ministry.is_active ? "Active" : "Inactive"}

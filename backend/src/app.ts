@@ -644,7 +644,7 @@ app.get(
 app.get(
   "/api/catalog",
   requireAuth,
-  route(async (_req, res) => {
+  route(async (req, res) => {
     res.json({
       campuses: await all(
         `select id, name,
@@ -653,7 +653,26 @@ app.get(
          from campuses where is_active order by name`
       ),
       ministries: await all(
-        "select id, name, description, is_active, created_at, updated_at from ministries where is_active order by name"
+        `select id, name, description, screener_score, is_active, created_at, updated_at
+         from ministries m
+         where m.is_active
+           and (
+             $1::uuid is null
+             or not exists (
+               select 1 from volunteer_profiles vp
+               where vp.id=$1 and vp.screener_score is not null
+             )
+             or exists (
+               select 1 from volunteer_profiles vp
+               where vp.id=$1 and vp.screener_score <= m.screener_score
+             )
+           )
+         order by name`,
+        [
+          req.user!.volunteerId && req.user!.roles.every((role) => role.toUpperCase() === "VOLUNTEER")
+            ? req.user!.volunteerId
+            : null
+        ]
       ),
       roles: await all(
         "select mr.*, m.name ministry_name from ministry_roles mr join ministries m on m.id=mr.ministry_id where mr.is_active order by m.name, mr.name"
@@ -710,8 +729,18 @@ app.post(
     const target = await get<{ ministry_name: string; campus_name: string }>(
       `select m.name ministry_name, c.name campus_name
        from ministries m cross join campuses c
-       where m.id=$1 and c.id=$2 and m.is_active and c.is_active`,
-      [body.ministryId, body.campusId]
+       where m.id=$1 and c.id=$2 and m.is_active and c.is_active
+         and (
+           not exists (
+             select 1 from volunteer_profiles vp
+             where vp.id=$3 and vp.screener_score is not null
+           )
+           or exists (
+             select 1 from volunteer_profiles vp
+             where vp.id=$3 and vp.screener_score <= m.screener_score
+           )
+         )`,
+      [body.ministryId, body.campusId, req.user!.volunteerId]
     );
     if (!target) throw new ApiError("Select an active ministry and campus", 422);
     const existingRequest = await get(
@@ -1258,6 +1287,7 @@ const ministryCampusLeadInput = z.object({
 const ministryInput = z.object({
   name: z.string().trim().min(2),
   description: z.string().trim().nullable().optional(),
+  screenerScore: z.number().int().min(0).max(10),
   ministryHeadUserId: uuid.nullish(),
   campusLeads: z.array(ministryCampusLeadInput).default([]),
   isActive: z.boolean().default(true)
@@ -1273,7 +1303,7 @@ app.get(
       throw new ApiError("Only an administrator or Ministry Head can view ministry assignments", 403);
     res.json(
       await all(
-        `select m.id, m.name, m.description, m.is_active, m.created_at, m.updated_at,
+        `select m.id, m.name, m.description, m.screener_score, m.is_active, m.created_at, m.updated_at,
         head.user_id ministry_head_user_id,
         coalesce(head_user.display_name, head_user.email) ministry_head_name,
         coalesce((
@@ -1339,8 +1369,8 @@ app.post(
       }
       const created = (
         await client.query<{ id: string }>(
-          `insert into ministries(name, description, is_active) values($1,$2,$3) returning id`,
-          [body.name, body.description || null, body.isActive]
+          `insert into ministries(name, description, screener_score, is_active) values($1,$2,$3,$4) returning id`,
+          [body.name, body.description || null, body.screenerScore, body.isActive]
         )
       ).rows[0]!;
       if (body.ministryHeadUserId) {
@@ -1412,8 +1442,8 @@ app.patch(
       }
       const updated = (
         await client.query<{ id: string }>(
-          `update ministries set name=$1, description=$2, is_active=$3 where id=$4 returning id`,
-          [body.name, body.description || null, body.isActive, ministryId]
+          `update ministries set name=$1, description=$2, screener_score=$3, is_active=$4 where id=$5 returning id`,
+          [body.name, body.description || null, body.screenerScore, body.isActive, ministryId]
         )
       ).rows[0];
       if (!updated) return undefined;
@@ -2502,12 +2532,23 @@ app.patch(
   requireRole("ADMIN", "SCREENER"),
   route(async (req, res) => {
     const id = uuid.parse(req.params.id);
-    const body = z.object({ status: z.enum(["APPROVED", "REJECTED"]), reason: z.string().optional() }).parse(req.body);
+    const body = z
+      .object({
+        status: z.enum(["APPROVED", "REJECTED"]),
+        reason: z.string().optional(),
+        screenerScore: z.number().int().min(0).max(10).optional()
+      })
+      .parse(req.body);
+    if (body.status === "APPROVED" && body.screenerScore === undefined)
+      throw new ApiError("Screener score is required before approving an application", 422);
     await run(
-      "update volunteer_profiles set application_status=$1,application_decided_at=now(),application_decided_by=$2,application_decision_reason=$3 where id=$4",
-      [body.status, req.user!.id, body.reason ?? null, id]
+      "update volunteer_profiles set application_status=$1,application_decided_at=now(),application_decided_by=$2,application_decision_reason=$3,screener_score=$4 where id=$5",
+      [body.status, req.user!.id, body.reason ?? null, body.status === "APPROVED" ? body.screenerScore : null, id]
     );
-    await audit(req.user!.id, `APPLICATION_${body.status}`, "volunteer", id, { reason: body.reason });
+    await audit(req.user!.id, `APPLICATION_${body.status}`, "volunteer", id, {
+      reason: body.reason,
+      screenerScore: body.status === "APPROVED" ? body.screenerScore : undefined
+    });
     res.json({ status: body.status });
   })
 );
