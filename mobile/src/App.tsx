@@ -844,6 +844,7 @@ function Registration({ done }: { done: () => void }) {
         type: "success",
         message: "An administrator will review it shortly."
       });
+      window.setTimeout(done, 1200);
     } catch (error) {
       setStatus({ type: "error", message: (error as Error).message });
     }
