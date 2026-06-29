@@ -3324,6 +3324,14 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
     });
   if (error instanceof ApiError) return res.status(error.statusCode).json({ error: error.message });
   if (error instanceof GeocodingError) return res.status(error.statusCode).json({ error: error.message });
+  if (
+    String((error as { code?: string }).code) === "42703" &&
+    String((error as { message?: string }).message).includes("screener_score")
+  )
+    return res.status(500).json({
+      error:
+        "Database schema is missing the screener score migration. Run supabase/migrations/20260629024_screener_scores.sql in Supabase."
+    });
   if (["42P01", "42703"].includes(String((error as { code?: string }).code)))
     return res.status(500).json({
       error:
