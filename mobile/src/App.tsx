@@ -1165,7 +1165,7 @@ function Events({
             All Locations
           </button>
         </div>
-        {!serveMode && hasRole(session, "ADMIN") && (
+        {!serveMode && canCreateOneOffEvents(session) && (
           <button className="primary" onClick={() => setCreating(true)}>
             + Create event
           </button>

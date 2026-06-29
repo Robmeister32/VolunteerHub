@@ -1465,10 +1465,10 @@ app.get(
              and (u.home_campus_id=e.campus_id or u.home_campus_id=any(e.participating_campus_ids))
          )
        ) matches_home_campus,
-       s.required_count, s.confirmed_count
+       coalesce(s.required_count, 0) required_count, coalesce(s.confirmed_count, 0) confirmed_count
      from events e join campuses c on c.id=e.campus_id
-     join event_staffing_summary s on s.event_id=e.id
-     where e.ends_at>now() and e.status=any($1::text[])
+     left join event_staffing_summary s on s.event_id=e.id
+     where (e.ends_at>now() or e.status='DRAFT') and e.status=any($1::text[])
        and ($2::text is null
          or e.name ilike '%' || $2 || '%'
          or e.description ilike '%' || $2 || '%'
