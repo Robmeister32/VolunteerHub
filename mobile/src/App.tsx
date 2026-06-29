@@ -4466,11 +4466,6 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                       >
                         <span className="eyebrow">Team {index + 1}</span>
                         <h3>{team.name || "New event team"}</h3>
-                        <small>
-                          {team.requiredVolunteerCount} volunteer
-                          {team.requiredVolunteerCount === 1 ? "" : "s"} required ·{" "}
-                          {team.signupPolicy === "AUTO" ? "Automatic signup" : "Leader approval"}
-                        </small>
                       </button>
                       {!readOnly && teams.length > 1 && (
                         <button

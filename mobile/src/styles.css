@@ -2472,13 +2472,13 @@ select:focus {
   background: transparent;
   border: 0;
 }
+.card-header .event-template-team-toggle {
+  display: grid;
+  align-items: center;
+  gap: 0;
+}
 .event-template-team-toggle h3 {
   margin: 5px 0 2px;
-}
-.event-template-team-toggle small {
-  color: var(--muted);
-  font-size: 0.7rem;
-  font-weight: 600;
 }
 .event-template-team-fields {
   display: grid;
