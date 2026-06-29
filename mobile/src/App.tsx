@@ -4257,6 +4257,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
   const [teams, setTeams] = useState<EventTemplateTeam[]>([]);
   const [saving, setSaving] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [expandedTeamIndex, setExpandedTeamIndex] = useState(0);
   const loadTemplates = useCallback(
     () =>
       api<EventTemplate[]>("/tools/event-templates")
@@ -4276,6 +4277,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
     setSelected(null);
     setForm({ ...blankEventTemplateForm });
     setTeams([]);
+    setExpandedTeamIndex(0);
     setEditorOpen(true);
   };
 
@@ -4287,6 +4289,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
       isActive: template.is_active
     });
     setTeams(template.teams);
+    setExpandedTeamIndex(0);
     setEditorOpen(true);
   };
 
@@ -4295,6 +4298,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
     setSelected(null);
     setForm({ ...blankEventTemplateForm });
     setTeams([]);
+    setExpandedTeamIndex(0);
   };
 
   const updateTeam = (index: number, patch: Partial<EventTemplateTeam>) => {
@@ -4447,99 +4451,131 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
               </div>
               <div className="event-template-team-list">
                 {teams.map((team, index) => (
-                  <article className="event-template-team-card" key={`${selected?.id ?? "new"}-${index}`}>
+                  <article
+                    className={["event-template-team-card", expandedTeamIndex === index ? "expanded" : "collapsed"]
+                      .filter(Boolean)
+                      .join(" ")}
+                    key={`${selected?.id ?? "new"}-${index}`}
+                  >
                     <div className="card-header">
-                      <div>
+                      <button
+                        className="event-template-team-toggle"
+                        type="button"
+                        aria-expanded={expandedTeamIndex === index}
+                        onClick={() => setExpandedTeamIndex(index)}
+                      >
                         <span className="eyebrow">Team {index + 1}</span>
                         <h3>{team.name || "New event team"}</h3>
-                      </div>
+                        <small>
+                          {team.requiredVolunteerCount} volunteer
+                          {team.requiredVolunteerCount === 1 ? "" : "s"} required ·{" "}
+                          {team.signupPolicy === "AUTO" ? "Automatic signup" : "Leader approval"}
+                        </small>
+                      </button>
                       {!readOnly && teams.length > 1 && (
                         <button
                           className="secondary danger"
                           type="button"
-                          onClick={() => setTeams((current) => current.filter((_, teamIndex) => teamIndex !== index))}
+                          onClick={() => {
+                            setTeams((current) => current.filter((_, teamIndex) => teamIndex !== index));
+                            setExpandedTeamIndex((current) => {
+                              if (current === index) return Math.max(0, index - 1);
+                              if (current > index) return current - 1;
+                              return current;
+                            });
+                          }}
                         >
                           <X size={16} /> Remove
                         </button>
                       )}
                     </div>
-                    <label>
-                      Ministry
-                      <select
-                        name={`teamName-${index}`}
-                        value={team.name || "Open"}
-                        onChange={(event) => updateTeam(index, { name: event.target.value })}
-                        disabled={readOnly}
-                        required
-                      >
-                        <option value="Open">Open</option>
-                        {team.name &&
-                          team.name !== "Open" &&
-                          !ministries.some((ministry) => ministry.name === team.name) && (
-                            <option value={team.name}>{team.name}</option>
-                          )}
-                        {ministries.map((ministry) => (
-                          <option key={ministry.id} value={ministry.name}>
-                            {ministry.name}
-                          </option>
-                        ))}
-                      </select>
-                      <small className="form-help">
-                        Open allows any volunteer from a participating campus to join.
-                      </small>
-                    </label>
-                    <label>
-                      Description
-                      <textarea name={`teamDescription-${index}`} rows={2} defaultValue={team.description} />
-                    </label>
-                    <label>
-                      Instructions
-                      <textarea name={`teamInstructions-${index}`} rows={2} defaultValue={team.instructions} />
-                    </label>
-                    <div className="two-col">
-                      <Field
-                        name={`teamRequiredVolunteerCount-${index}`}
-                        label="Volunteers required"
-                        type="number"
-                        defaultValue={team.requiredVolunteerCount}
-                      />
+                    <div className="event-template-team-fields" hidden={expandedTeamIndex !== index}>
                       <label>
-                        Signup policy
+                        Ministry
                         <select
-                          name={`teamSignupPolicy-${index}`}
-                          defaultValue={team.signupPolicy}
+                          name={`teamName-${index}`}
+                          value={team.name || "Open"}
+                          onChange={(event) => updateTeam(index, { name: event.target.value })}
+                          disabled={readOnly}
+                          required
+                        >
+                          <option value="Open">Open</option>
+                          {team.name &&
+                            team.name !== "Open" &&
+                            !ministries.some((ministry) => ministry.name === team.name) && (
+                              <option value={team.name}>{team.name}</option>
+                            )}
+                          {ministries.map((ministry) => (
+                            <option key={ministry.id} value={ministry.name}>
+                              {ministry.name}
+                            </option>
+                          ))}
+                        </select>
+                        <small className="form-help">
+                          Open allows any volunteer from a participating campus to join.
+                        </small>
+                      </label>
+                      <label>
+                        Description
+                        <textarea name={`teamDescription-${index}`} rows={2} defaultValue={team.description} />
+                      </label>
+                      <label>
+                        Instructions
+                        <textarea name={`teamInstructions-${index}`} rows={2} defaultValue={team.instructions} />
+                      </label>
+                      <div className="two-col">
+                        <label>
+                          Volunteers required
+                          <input
+                            name={`teamRequiredVolunteerCount-${index}`}
+                            type="number"
+                            value={team.requiredVolunteerCount}
+                            onChange={(event) =>
+                              updateTeam(index, { requiredVolunteerCount: Number(event.target.value) })
+                            }
+                            required
+                          />
+                        </label>
+                        <label>
+                          Signup policy
+                          <select
+                            name={`teamSignupPolicy-${index}`}
+                            defaultValue={team.signupPolicy}
+                            onChange={(event) =>
+                              updateTeam(index, {
+                                signupPolicy: event.target.value as EventTemplateTeam["signupPolicy"]
+                              })
+                            }
+                          >
+                            <option value="AUTO">Automatic confirmation</option>
+                            <option value="APPROVAL">Leader approval</option>
+                          </select>
+                        </label>
+                      </div>
+                      <label>
+                        Move/swap policy
+                        <select
+                          name={`teamMovementPolicy-${index}`}
+                          defaultValue={team.movementPolicy}
                           onChange={(event) =>
-                            updateTeam(index, { signupPolicy: event.target.value as EventTemplateTeam["signupPolicy"] })
+                            updateTeam(index, {
+                              movementPolicy: event.target.value as EventTemplateTeam["movementPolicy"]
+                            })
                           }
                         >
                           <option value="AUTO">Automatic confirmation</option>
                           <option value="APPROVAL">Leader approval</option>
                         </select>
                       </label>
+                      <label className="check-label">
+                        <input
+                          name={`teamSelfCheckinEnabled-${index}`}
+                          type="checkbox"
+                          defaultChecked={team.selfCheckinEnabled}
+                        />
+                        Enable location-bound self check-in
+                      </label>
                     </div>
-                    <label>
-                      Move/swap policy
-                      <select
-                        name={`teamMovementPolicy-${index}`}
-                        defaultValue={team.movementPolicy}
-                        onChange={(event) =>
-                          updateTeam(index, {
-                            movementPolicy: event.target.value as EventTemplateTeam["movementPolicy"]
-                          })
-                        }
-                      >
-                        <option value="AUTO">Automatic confirmation</option>
-                        <option value="APPROVAL">Leader approval</option>
-                      </select>
-                    </label>
-                    <label className="check-label">
-                      <input
-                        name={`teamSelfCheckinEnabled-${index}`}
-                        type="checkbox"
-                        defaultChecked={team.selfCheckinEnabled}
-                      />
-                      Enable location-bound self check-in
-                    </label>
                   </article>
                 ))}
                 {!teams.length && <Empty text="No event teams have been added to this template." />}
@@ -4548,7 +4584,10 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                 <button
                   className="secondary full"
                   type="button"
-                  onClick={() => setTeams((current) => [...current, { ...blankEventTemplateTeam }])}
+                  onClick={() => {
+                    setTeams((current) => [...current, { ...blankEventTemplateTeam }]);
+                    setExpandedTeamIndex(teams.length);
+                  }}
                 >
                   <Plus size={16} /> Add team
                 </button>

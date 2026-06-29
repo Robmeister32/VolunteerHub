@@ -2456,6 +2456,37 @@ select:focus {
   border-radius: 10px;
   background: #fff;
 }
+.event-template-team-card.collapsed {
+  padding-bottom: 12px;
+}
+.event-template-team-card.collapsed .card-header {
+  margin-bottom: 0;
+}
+.event-template-team-toggle {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+.event-template-team-toggle h3 {
+  margin: 5px 0 2px;
+}
+.event-template-team-toggle small {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.event-template-team-fields {
+  display: grid;
+  gap: 12px;
+}
+.event-template-team-fields[hidden] {
+  display: none;
+}
 .event-template-team-card .card-header h3,
 .event-template-teams .card-header h3 {
   margin: 4px 0 0;
