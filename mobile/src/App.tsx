@@ -4255,6 +4255,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
   const [selected, setSelected] = useState<EventTemplate | null>(null);
   const [form, setForm] = useState<EventTemplateForm>(blankEventTemplateForm);
   const [teams, setTeams] = useState<EventTemplateTeam[]>([]);
+  const [templateTab, setTemplateTab] = useState<"ACTIVE" | "ARCHIVED">("ACTIVE");
   const [saving, setSaving] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [expandedTeamIndex, setExpandedTeamIndex] = useState(0);
@@ -4341,7 +4342,42 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
     }
   };
 
+  const archiveTemplate = async () => {
+    if (!selected || !selected.can_edit) return;
+    setSaving(true);
+    try {
+      await api(`/tools/event-templates/${selected.id}/archive`, { method: "PATCH" });
+      await loadTemplates();
+      setTemplateTab("ARCHIVED");
+      backToList();
+      notify("Event template archived.");
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteTemplate = async () => {
+    if (!selected || !selected.can_edit) return;
+    if (!window.confirm(`Delete ${selected.name}? This permanently removes the template from the database.`)) return;
+    setSaving(true);
+    try {
+      await api(`/tools/event-templates/${selected.id}`, { method: "DELETE" });
+      await loadTemplates();
+      backToList();
+      notify("Event template deleted.");
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const readOnly = Boolean(selected && !selected.can_edit);
+  const activeTemplates = templates.filter((template) => template.is_active);
+  const archivedTemplates = templates.filter((template) => !template.is_active);
+  const displayedTemplates = templateTab === "ACTIVE" ? activeTemplates : archivedTemplates;
 
   return (
     <>
@@ -4371,14 +4407,33 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
             <div className="card-header">
               <div>
                 <span className="eyebrow">Template library</span>
-                <h3>{templates.length} event templates</h3>
+                <h3>
+                  {displayedTemplates.length} {templateTab === "ACTIVE" ? "active" : "archived"} template
+                  {displayedTemplates.length === 1 ? "" : "s"}
+                </h3>
               </div>
               <button className="secondary" type="button" onClick={startNew}>
                 <Plus size={16} /> New
               </button>
             </div>
+            <div className="location-filter template-tabs" aria-label="Event template status">
+              <button
+                type="button"
+                className={templateTab === "ACTIVE" ? "active" : ""}
+                onClick={() => setTemplateTab("ACTIVE")}
+              >
+                Active
+              </button>
+              <button
+                type="button"
+                className={templateTab === "ARCHIVED" ? "active" : ""}
+                onClick={() => setTemplateTab("ARCHIVED")}
+              >
+                Archived
+              </button>
+            </div>
             <div className="email-template-list-items">
-              {templates.map((template) => (
+              {displayedTemplates.map((template) => (
                 <button
                   key={template.id}
                   className={
@@ -4395,11 +4450,17 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                       {template.teams.length} team{template.teams.length === 1 ? "" : "s"}
                     </small>
                   </span>
-                  {!template.is_active && <span className="status neutral">Inactive</span>}
+                  {!template.is_active && <span className="status neutral">Archived</span>}
                   <ChevronRight size={17} />
                 </button>
               ))}
-              {!templates.length && <p className="empty-state">No event templates yet. Create the first one.</p>}
+              {!displayedTemplates.length && (
+                <p className="empty-state">
+                  {templateTab === "ACTIVE"
+                    ? "No active event templates yet. Create the first one."
+                    : "No archived event templates."}
+                </p>
+              )}
             </div>
           </aside>
         )}
@@ -4600,6 +4661,16 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                   Active template
                 </label>
                 <div className="card-actions">
+                  {selected && selected.is_active && (
+                    <button className="secondary" type="button" disabled={saving} onClick={archiveTemplate}>
+                      Archive
+                    </button>
+                  )}
+                  {selected && (
+                    <button className="secondary danger" type="button" disabled={saving} onClick={deleteTemplate}>
+                      Delete
+                    </button>
+                  )}
                   <button className="secondary" type="button" onClick={startNew}>
                     Clear
                   </button>

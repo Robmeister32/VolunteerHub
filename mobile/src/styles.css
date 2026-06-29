@@ -2387,6 +2387,9 @@ select:focus {
 .email-template-list .card-header > div h3 {
   margin: 4px 0 0;
 }
+.template-tabs {
+  margin-bottom: 13px;
+}
 .email-template-list-items {
   display: grid;
   gap: 7px;

@@ -1689,6 +1689,46 @@ app.patch(
   })
 );
 
+app.patch(
+  "/api/tools/event-templates/:id/archive",
+  requireAuth,
+  requireRole("ADMIN", "EVENT_LEADER"),
+  route(async (req, res) => {
+    const id = uuid.parse(req.params.id);
+    const existing = await get<{ created_by: string; name: string }>(
+      "select created_by, name from event_templates where id=$1",
+      [id]
+    );
+    if (!existing) throw new ApiError("Event template not found", 404);
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    if (!isAdmin && existing.created_by !== req.user!.id)
+      throw new ApiError("Only the template creator can archive this template", 403);
+    await run("update event_templates set is_active=false where id=$1", [id]);
+    await audit(req.user!.id, "EVENT_TEMPLATE_ARCHIVED", "event_template", id, { name: existing.name });
+    res.json({ message: "Event template archived" });
+  })
+);
+
+app.delete(
+  "/api/tools/event-templates/:id",
+  requireAuth,
+  requireRole("ADMIN", "EVENT_LEADER"),
+  route(async (req, res) => {
+    const id = uuid.parse(req.params.id);
+    const existing = await get<{ id: string; name: string; created_by: string }>(
+      "select id, name, created_by from event_templates where id=$1",
+      [id]
+    );
+    if (!existing) throw new ApiError("Event template not found", 404);
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    if (!isAdmin && existing.created_by !== req.user!.id)
+      throw new ApiError("Only the template creator can delete this template", 403);
+    await run("delete from event_templates where id=$1", [id]);
+    await audit(req.user!.id, "EVENT_TEMPLATE_DELETED", "event_template", id, { name: existing.name });
+    res.json({ message: "Event template deleted" });
+  })
+);
+
 app.post(
   "/api/tools/event-templates/:id/create-events",
   requireAuth,
