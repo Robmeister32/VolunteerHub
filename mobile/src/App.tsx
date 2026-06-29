@@ -372,8 +372,6 @@ const demoAccounts = [
   { role: "EVENT_LEADER", email: "leader@volunteerhub.local", description: "Rosters, approvals, and attendance" },
   { role: "VOLUNTEER", email: "volunteer@volunteerhub.local", description: "Events, household, and schedule" }
 ] as const;
-const eventSearchCache = new Map<string, EventItem[]>();
-
 function hasRole(session: Session, role: UserRole) {
   return session.roles.includes(role);
 }
@@ -1012,9 +1010,12 @@ function Events({
   notify: (message: string) => void;
   serveMode?: boolean;
 }) {
+  const canManageAllEvents = !serveMode && canCreateOneOffEvents(session);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [eventSearch, setEventSearch] = useState("");
-  const [locationScope, setLocationScope] = useState<"MY_CAMPUS" | "ALL">("MY_CAMPUS");
+  const [locationScope, setLocationScope] = useState<"MY_CAMPUS" | "ALL">(() =>
+    canManageAllEvents ? "ALL" : "MY_CAMPUS"
+  );
   const [searchingEvents, setSearchingEvents] = useState(false);
   const [selected, setSelected] = useState<EventItem | null>(null);
   const [editSelected, setEditSelected] = useState(false);
@@ -1023,17 +1024,14 @@ function Events({
   const [creating, setCreating] = useState(false);
   const debouncedEventSearch = useDebouncedValue(eventSearch);
   const load = useCallback(
-    async ({ signal, force = false }: { signal?: AbortSignal; force?: boolean } = {}) => {
+    async ({ signal }: { signal?: AbortSignal; force?: boolean } = {}) => {
       const params = new URLSearchParams();
       if (serveMode) params.set("serve", "true");
       if (debouncedEventSearch.trim().length >= 2) params.set("q", debouncedEventSearch.trim());
       const path = `/events${params.size ? `?${params}` : ""}`;
-      const cacheKey = path.toLowerCase();
-      const cached = !force ? eventSearchCache.get(cacheKey) : undefined;
-      setSearchingEvents(!cached);
+      setSearchingEvents(true);
       try {
-        const rows = cached ?? (await api<EventItem[]>(path, { signal }));
-        eventSearchCache.set(cacheKey, rows);
+        const rows = await api<EventItem[]>(path, { signal });
         setEvents(rows);
         setSelected((current) => (current ? (rows.find((event) => event.id === current.id) ?? null) : null));
         setManaging((current) => (current ? (rows.find((event) => event.id === current.id) ?? null) : null));
@@ -1044,7 +1042,6 @@ function Events({
     [debouncedEventSearch, serveMode]
   );
   const refreshEvents = useCallback(() => {
-    eventSearchCache.clear();
     return load({ force: true });
   }, [load]);
   useEffect(() => {
@@ -1057,7 +1054,7 @@ function Events({
   const visibleEvents = events.filter(
     (event) =>
       locationScope === "ALL" ||
-      (!serveMode && event.status === "DRAFT" && canCreateOneOffEvents(session)) ||
+      (canManageAllEvents && event.status === "DRAFT") ||
       eventMatchesHomeCampus(event, session)
   );
   const groupedEvents = [...visibleEvents]
@@ -3739,7 +3736,6 @@ function OneOffEventCreator({
         })
       });
       notify("Event created as Draft.");
-      eventSearchCache.clear();
       close();
     } catch (error) {
       notify((error as Error).message);
@@ -4052,7 +4048,6 @@ function TemplateEventCreator({
         })
       });
       notify(`${result.createdCount} event${result.createdCount === 1 ? "" : "s"} created as draft.`);
-      eventSearchCache.clear();
       close();
     } catch (error) {
       notify((error as Error).message);
