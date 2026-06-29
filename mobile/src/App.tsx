@@ -406,6 +406,30 @@ function canManageMinistryMembershipTools(session: Session) {
   );
 }
 
+function eventHasPassed(event: Pick<EventItem, "ends_at">) {
+  const endsAt = new Date(event.ends_at).getTime();
+  return Number.isFinite(endsAt) && endsAt < Date.now();
+}
+
+function eventNeedsAction(event: Pick<EventItem, "status" | "ends_at">) {
+  return (
+    event.status === "DRAFT" ||
+    (eventHasPassed(event) && !["COMPLETE", "CANCELLED", "REMOVED"].includes(event.status))
+  );
+}
+
+function eventStatusBadgeLabel(event: Pick<EventItem, "status" | "ends_at">) {
+  if (event.status === "DRAFT") return "Draft";
+  if (eventHasPassed(event) && !["COMPLETE", "CANCELLED", "REMOVED"].includes(event.status)) return "Close event";
+  return formatRoleName(event.status);
+}
+
+function eventStatusBadgeTone(event: Pick<EventItem, "status" | "ends_at">) {
+  if (eventNeedsAction(event)) return "action";
+  if (event.status === "ACTIVE") return "active";
+  return event.status.toLowerCase();
+}
+
 function formatRoleName(role: string) {
   if (role === "ADMIN") return "Administrator";
   return role
@@ -443,6 +467,7 @@ export function App() {
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [activeTasks, setActiveTasks] = useState(0);
   const [pendingMinistryRequests, setPendingMinistryRequests] = useState(0);
+  const [actionableEvents, setActionableEvents] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useEffect(
@@ -483,15 +508,22 @@ export function App() {
     const requests = await api<MinistryMembershipRequest[]>("/tools/ministry-membership/requests");
     setPendingMinistryRequests(requests.length);
   };
+  const refreshEventNotifications = async () => {
+    if (!session || !canCreateOneOffEvents(session)) return setActionableEvents(0);
+    const events = await api<EventItem[]>("/events");
+    setActionableEvents(events.filter(eventNeedsAction).length);
+  };
   useEffect(() => {
     if (!session) return;
     void refreshUnreadMessages();
     void refreshActiveTasks();
     void refreshMinistryMembershipNotifications();
+    void refreshEventNotifications();
     const timer = window.setInterval(() => {
       void refreshUnreadMessages();
       void refreshActiveTasks();
       void refreshMinistryMembershipNotifications();
+      void refreshEventNotifications();
     }, 30_000);
     return () => window.clearInterval(timer);
   }, [session]);
@@ -561,6 +593,12 @@ export function App() {
     setMenuOpen(false);
     setView("tools");
   };
+  const openActionableEvents = () => {
+    setNotificationsOpen(false);
+    setMenuOpen(false);
+    setView("events");
+  };
+  const notificationCount = pendingMinistryRequests + actionableEvents;
 
   return (
     <div className="app-shell">
@@ -616,30 +654,45 @@ export function App() {
           <div className="notification-area">
             <button
               className="icon-button notification-button"
-              aria-label={`Notifications${pendingMinistryRequests ? `, ${pendingMinistryRequests} pending` : ""}`}
+              aria-label={`Notifications${notificationCount ? `, ${notificationCount} pending` : ""}`}
               aria-expanded={notificationsOpen}
               type="button"
               onClick={() => setNotificationsOpen((open) => !open)}
             >
               <Bell size={19} />
-              {pendingMinistryRequests > 0 && <strong className="notification-badge">{pendingMinistryRequests}</strong>}
+              {notificationCount > 0 && <strong className="notification-badge">{notificationCount}</strong>}
             </button>
             {notificationsOpen && (
               <div className="notification-popover">
                 <div className="notification-popover-header">
                   <strong>Notifications</strong>
                 </div>
-                {pendingMinistryRequests > 0 ? (
-                  <button type="button" className="notification-item" onClick={openMinistryMembershipApprovals}>
-                    <span>
-                      <strong>
-                        {pendingMinistryRequests} pending volunteer
-                        {pendingMinistryRequests === 1 ? "" : "s"}
-                      </strong>
-                      <small>Review ministry membership requests</small>
-                    </span>
-                    <ChevronRight size={17} />
-                  </button>
+                {notificationCount > 0 ? (
+                  <>
+                    {pendingMinistryRequests > 0 && (
+                      <button type="button" className="notification-item" onClick={openMinistryMembershipApprovals}>
+                        <span>
+                          <strong>
+                            {pendingMinistryRequests} pending volunteer
+                            {pendingMinistryRequests === 1 ? "" : "s"}
+                          </strong>
+                          <small>Review ministry membership requests</small>
+                        </span>
+                        <ChevronRight size={17} />
+                      </button>
+                    )}
+                    {actionableEvents > 0 && (
+                      <button type="button" className="notification-item" onClick={openActionableEvents}>
+                        <span>
+                          <strong>
+                            {actionableEvents} event{actionableEvents === 1 ? "" : "s"} need attention
+                          </strong>
+                          <small>Publish drafts or close events past their end date</small>
+                        </span>
+                        <ChevronRight size={17} />
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <p className="notification-empty">No items need attention.</p>
                 )}
@@ -1823,8 +1876,9 @@ function EventCard({
   onManage: () => void;
 }) {
   const percentage = Math.min(100, Math.round((event.confirmed_count / Math.max(1, event.required_count)) * 100));
+  const needsAction = eventNeedsAction(event);
   return (
-    <article className="event-card">
+    <article className={["event-card", needsAction ? "event-card-actionable" : ""].filter(Boolean).join(" ")}>
       <div className="event-card-top">
         <div className="event-card-tiles">
           <div className="calendar-block">
@@ -1835,6 +1889,7 @@ function EventCard({
             <strong>{event.groups.length}</strong>
             <span>{event.groups.length === 1 ? "Team" : "Teams"}</span>
           </div>
+          <span className={`event-status-badge ${eventStatusBadgeTone(event)}`}>{eventStatusBadgeLabel(event)}</span>
         </div>
         {!serveMode && hasRole(session, "ADMIN") ? (
           <div className="event-card-top-actions">
