@@ -1135,13 +1135,13 @@ function Events({
         <div className="search active">
           <Search size={17} />
           <label className="sr-only" htmlFor="event-search">
-            Search upcoming events
+            {serveMode ? "Search upcoming events" : "Search events"}
           </label>
           <input
             id="event-search"
             value={eventSearch}
             type="search"
-            placeholder="Search upcoming events"
+            placeholder={serveMode ? "Search upcoming events" : "Search events"}
             onChange={(event) => setEventSearch(event.target.value)}
           />
           {searchingEvents && <span className="searching-indicator">Searching…</span>}
@@ -1236,10 +1236,10 @@ function Events({
         <Empty
           text={
             eventSearch
-              ? "No upcoming events match your search."
+              ? "No events match your search."
               : locationScope === "MY_CAMPUS"
-                ? "There are no upcoming events for your campus or off-site locations."
-                : "There are no upcoming events."
+                ? "There are no events for your campus or off-site locations."
+                : "There are no events."
           }
         />
       )}

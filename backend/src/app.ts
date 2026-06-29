@@ -1444,7 +1444,9 @@ app.get(
         ? requestedVolunteerId
         : req.user!.volunteerId;
     const visibleStatuses =
-      hasRole(req.user!, "ADMIN") || hasRole(req.user!, "EVENT_LEADER") ? ["ACTIVE", "DRAFT"] : ["ACTIVE"];
+      serveMode || (!hasRole(req.user!, "ADMIN") && !hasRole(req.user!, "EVENT_LEADER"))
+        ? ["ACTIVE"]
+        : ["ACTIVE", "DRAFT"];
     const events = await all<Record<string, unknown>>(
       `select e.*, c.name campus_name,
        concat_ws(', ', c.address_line_1, nullif(c.address_line_2, ''), c.city, c.region || ' ' || c.postal_code) campus_address,
@@ -1468,7 +1470,7 @@ app.get(
        coalesce(s.required_count, 0) required_count, coalesce(s.confirmed_count, 0) confirmed_count
      from events e join campuses c on c.id=e.campus_id
      left join event_staffing_summary s on s.event_id=e.id
-     where (e.ends_at>now() or e.status='DRAFT') and e.status=any($1::text[])
+     where ($4::boolean = false or e.ends_at>now()) and e.status=any($1::text[])
        and ($2::text is null
          or e.name ilike '%' || $2 || '%'
          or e.description ilike '%' || $2 || '%'
@@ -1476,7 +1478,7 @@ app.get(
          or c.name ilike '%' || $2 || '%'
          or exists (select 1 from event_groups search_group where search_group.event_id=e.id and search_group.name ilike '%' || $2 || '%'))
      order by e.starts_at`,
-      [visibleStatuses, search ?? null, req.user!.id]
+      [visibleStatuses, search ?? null, req.user!.id, serveMode]
     );
     for (const event of events) {
       event.groups = await all(
