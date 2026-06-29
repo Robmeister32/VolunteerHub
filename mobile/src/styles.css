@@ -2264,7 +2264,8 @@ select:focus {
   min-width: 30px;
   height: 30px;
   padding: 0 8px;
-  color: #7a4e00;
+  /* color: #7a4e00; */
+  color: var(--cream);
   font-size: 0.75rem;
   font-weight: 700;
   /* background: #f8d66d; */
