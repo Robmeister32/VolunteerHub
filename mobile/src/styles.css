@@ -1448,18 +1448,26 @@ main {
 .event-status-badge {
   display: inline-grid;
   min-width: 78px;
-  min-height: 44px;
+  min-height: 66px;
   padding: 8px 11px;
   place-items: center;
+  align-content: center;
+  gap: 2px;
   color: #8b5e16;
   background: #fff4d8;
   border: 1px solid #f0cd84;
   border-radius: 11px;
-  font-size: 0.68rem;
   font-weight: 800;
   line-height: 1.1;
   text-align: center;
   text-transform: uppercase;
+}
+.event-status-badge strong {
+  font-size: 1.55rem;
+  line-height: 1;
+}
+.event-status-badge span {
+  font-size: 0.68rem;
 }
 .event-status-badge.action {
   color: #9f3428;

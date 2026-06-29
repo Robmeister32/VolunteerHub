@@ -1889,7 +1889,10 @@ function EventCard({
             <strong>{event.groups.length}</strong>
             <span>{event.groups.length === 1 ? "Team" : "Teams"}</span>
           </div>
-          <span className={`event-status-badge ${eventStatusBadgeTone(event)}`}>{eventStatusBadgeLabel(event)}</span>
+          <span className={`event-status-badge ${eventStatusBadgeTone(event)}`}>
+            <strong>1</strong>
+            <span>{eventStatusBadgeLabel(event)}</span>
+          </span>
         </div>
         {!serveMode && hasRole(session, "ADMIN") ? (
           <div className="event-card-top-actions">
