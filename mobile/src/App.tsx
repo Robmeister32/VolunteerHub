@@ -420,7 +420,7 @@ function eventNeedsAction(event: Pick<EventItem, "status" | "ends_at">) {
 
 function eventStatusBadgeLabel(event: Pick<EventItem, "status" | "ends_at">) {
   if (event.status === "DRAFT") return "Draft";
-  if (eventHasPassed(event) && !["COMPLETE", "CANCELLED", "REMOVED"].includes(event.status)) return "Close event";
+  if (eventHasPassed(event) && !["COMPLETE", "CANCELLED", "REMOVED"].includes(event.status)) return "Expired";
   return formatRoleName(event.status);
 }
 
