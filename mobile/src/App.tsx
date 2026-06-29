@@ -47,7 +47,7 @@ import {
   login,
   logout,
   observeAuth,
-  registerIdentity,
+  registerApplication,
   type EventGroupItem,
   type EventItem,
   type EventStatus,
@@ -830,17 +830,15 @@ function Registration({ done }: { done: () => void }) {
     }
 
     try {
-      await registerIdentity(String(data.email), String(data.password));
-      await api("/auth/register", {
-        method: "POST",
-        body: JSON.stringify({
-          firstName: data.firstName,
-          middleName: data.middleName,
-          lastName: data.lastName,
-          phone: data.phone,
-          birthDate: data.birthDate,
-          smsConsent: true
-        })
+      await registerApplication({
+        firstName: String(data.firstName),
+        middleName: String(data.middleName ?? ""),
+        lastName: String(data.lastName),
+        email: String(data.email),
+        phone: String(data.phone ?? ""),
+        birthDate: String(data.birthDate),
+        password: String(data.password),
+        smsConsent: true
       });
       setStatus({
         type: "success",

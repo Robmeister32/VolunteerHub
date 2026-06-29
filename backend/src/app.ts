@@ -1,9 +1,11 @@
 import express from "express";
 import cors from "cors";
+import { getAuth } from "firebase-admin/auth";
 import { z } from "zod";
 import { audit, all, checkDatabase, get, pool, run, transaction } from "./db.js";
 import { hasRole, requireAuth, requireFirebase, requireRole } from "./auth.js";
 import { haversineMeters } from "./domain.js";
+import { initializeFirebaseAdmin } from "./firebase-admin.js";
 import { geocodeAddress, GeocodingError } from "./geocoding.js";
 import { createTwilioConversationAccess } from "./twilio-conversations.js";
 import type { AuthedRequest, AuthUser } from "./types.js";
@@ -11,6 +13,7 @@ import type { AuthedRequest, AuthUser } from "./types.js";
 export const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGINS?.split(",") ?? true }));
 app.use(express.json({ limit: "2mb" }));
+const firebaseAdminAuth = getAuth(initializeFirebaseAdmin());
 
 const uuid = z.string().uuid();
 const emailTemplateVariables = [
@@ -118,56 +121,148 @@ app.get(
   })
 );
 
+const optionalRegistrationPhone = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().max(40).optional()
+);
+const registrationProfileInput = z.object({
+  firstName: z.string().trim().min(1),
+  middleName: z.string().trim().optional(),
+  lastName: z.string().trim().min(1),
+  phone: optionalRegistrationPhone,
+  birthDate: z.iso.date(),
+  smsConsent: z.boolean().default(false)
+});
+const publicRegistrationInput = registrationProfileInput.extend({
+  email: z
+    .string()
+    .trim()
+    .email()
+    .max(320)
+    .transform((email) => email.toLowerCase()),
+  password: z.string().min(6).max(128)
+});
+
+function displayNameFromRegistration(body: z.infer<typeof registrationProfileInput>) {
+  return [body.firstName, body.middleName, body.lastName].filter(Boolean).join(" ");
+}
+
+function normalizeRegistrationPhone(phone?: string) {
+  const value = phone?.trim();
+  if (!value) return undefined;
+  const compact = value.replace(/[^\d+]/g, "");
+  const digits = value.replace(/\D/g, "");
+  if (/^\+[1-9]\d{7,14}$/.test(compact)) return compact;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  throw new ApiError("Invalid phone number", 422);
+}
+
+function firebaseRegistrationError(error: unknown) {
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+  if (code === "auth/invalid-password") return new ApiError("Password must be at least 6 characters.", 422);
+  if (code === "auth/invalid-email") return new ApiError("Enter a valid email address.", 422);
+  if (code === "auth/email-already-exists") return new ApiError("Email already exists.", 409);
+  return error;
+}
+
+async function createVolunteerApplication(
+  authUid: string,
+  email: string,
+  body: z.infer<typeof registrationProfileInput>,
+  phone: string | undefined
+) {
+  return transaction(async (client) => {
+    const user = (
+      await client.query<{ id: string }>(
+        `insert into volunteerhub.app_users(auth_uid, email, phone, display_name, middle_name)
+         values ($1, $2, $3, $4, $5) returning id`,
+        [authUid, email.toLowerCase(), phone ?? null, displayNameFromRegistration(body), body.middleName || null]
+      )
+    ).rows[0]!;
+    await client.query("insert into app_user_roles(user_id, role_code) values($1, 'VOLUNTEER')", [user.id]);
+    const volunteer = (
+      await client.query<{ id: string }>(
+        `insert into volunteer_profiles(app_user_id, first_name, middle_name, last_name, birth_date, application_status, application_submitted_at)
+         values ($1, $2, $3, $4, $5, 'SUBMITTED', now()) returning id`,
+        [user.id, body.firstName, body.middleName || null, body.lastName, body.birthDate]
+      )
+    ).rows[0]!;
+    await client.query(`insert into notification_preferences(volunteer_id, sms_enabled) values ($1, $2)`, [
+      volunteer.id,
+      body.smsConsent
+    ]);
+    if (body.smsConsent) {
+      await client.query(
+        `insert into consents(volunteer_id, consent_type, version, granted) values ($1, 'SMS', '1', true)`,
+        [volunteer.id]
+      );
+    }
+    return { userId: user.id, volunteerId: volunteer.id };
+  });
+}
+
+app.post(
+  "/api/auth/register-application",
+  route(async (req, res) => {
+    const body = publicRegistrationInput.parse(req.body);
+    const phone = normalizeRegistrationPhone(body.phone);
+    const existingDomainUser = await get("select id from volunteerhub.app_users where lower(email::text)=lower($1)", [
+      body.email
+    ]);
+    if (existingDomainUser) throw new ApiError("Email already exists.", 409);
+
+    let firebaseUid = "";
+    let createdFirebaseUser = false;
+    try {
+      try {
+        const firebaseUser = await firebaseAdminAuth.createUser({
+          email: body.email,
+          password: body.password,
+          displayName: displayNameFromRegistration(body)
+        });
+        firebaseUid = firebaseUser.uid;
+        createdFirebaseUser = true;
+      } catch (error) {
+        const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+        if (code !== "auth/email-already-exists") throw error;
+        const existingFirebaseUser = await firebaseAdminAuth.getUserByEmail(body.email);
+        const existingProvisionedUser = await get(
+          "select id from volunteerhub.app_users where auth_uid=$1 or lower(email::text)=lower($2)",
+          [existingFirebaseUser.uid, body.email]
+        );
+        if (existingProvisionedUser) throw new ApiError("Email already exists.", 409);
+        await firebaseAdminAuth.updateUser(existingFirebaseUser.uid, {
+          password: body.password,
+          displayName: displayNameFromRegistration(body)
+        });
+        firebaseUid = existingFirebaseUser.uid;
+      }
+
+      const result = await createVolunteerApplication(firebaseUid, body.email, body, phone);
+      await audit(result.userId, "USER_REGISTERED", "auth", result.userId, { email: body.email });
+      await audit(result.userId, "APPLICATION_SUBMITTED", "volunteer", result.volunteerId);
+      res.status(201).json({ message: "Application submitted for review" });
+    } catch (error) {
+      if (createdFirebaseUser && firebaseUid) {
+        await firebaseAdminAuth.deleteUser(firebaseUid).catch((deleteError) => {
+          console.error("Failed to clean up Firebase user after registration failure", deleteError);
+        });
+      }
+      throw firebaseRegistrationError(error);
+    }
+  })
+);
+
 app.post(
   "/api/auth/register",
   requireFirebase,
   route(async (req, res) => {
-    const body = z
-      .object({
-        firstName: z.string().min(1),
-        middleName: z.string().trim().optional(),
-        lastName: z.string().min(1),
-        phone: z.string().min(7).optional(),
-        birthDate: z.iso.date(),
-        smsConsent: z.boolean().default(false)
-      })
-      .parse(req.body);
+    const body = registrationProfileInput.parse(req.body);
+    const phone = normalizeRegistrationPhone(body.phone);
     const existing = await get("select id from volunteerhub.app_users where auth_uid=$1", [req.firebase!.uid]);
     if (existing) return void res.status(409).json({ error: "VolunteerHub profile already exists" });
-    const result = await transaction(async (client) => {
-      const user = (
-        await client.query<{ id: string }>(
-          `insert into volunteerhub.app_users(auth_uid, email, phone, display_name, middle_name)
-       values ($1, $2, $3, $4, $5) returning id`,
-          [
-            req.firebase!.uid,
-            req.firebase!.email!.toLowerCase(),
-            body.phone ?? null,
-            [body.firstName, body.middleName, body.lastName].filter(Boolean).join(" "),
-            body.middleName || null
-          ]
-        )
-      ).rows[0]!;
-      await client.query("insert into app_user_roles(user_id, role_code) values($1, 'VOLUNTEER')", [user.id]);
-      const volunteer = (
-        await client.query<{ id: string }>(
-          `insert into volunteer_profiles(app_user_id, first_name, middle_name, last_name, birth_date, application_status, application_submitted_at)
-       values ($1, $2, $3, $4, $5, 'SUBMITTED', now()) returning id`,
-          [user.id, body.firstName, body.middleName || null, body.lastName, body.birthDate]
-        )
-      ).rows[0]!;
-      await client.query(`insert into notification_preferences(volunteer_id, sms_enabled) values ($1, $2)`, [
-        volunteer.id,
-        body.smsConsent
-      ]);
-      if (body.smsConsent) {
-        await client.query(
-          `insert into consents(volunteer_id, consent_type, version, granted) values ($1, 'SMS', '1', true)`,
-          [volunteer.id]
-        );
-      }
-      return { userId: user.id, volunteerId: volunteer.id };
-    });
+    const result = await createVolunteerApplication(req.firebase!.uid, req.firebase!.email!, body, phone);
     await audit(result.userId, "USER_REGISTERED", "auth", result.userId, {
       email: req.firebase!.email?.toLowerCase()
     });

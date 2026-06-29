@@ -1,10 +1,4 @@
-import {
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut,
-  type User
-} from "firebase/auth";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 import { auth } from "./firebase";
 
 export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
@@ -30,8 +24,17 @@ export async function login(email: string, password: string) {
   return api<Record<string, unknown>>("/me").then(toSession);
 }
 
-export async function registerIdentity(email: string, password: string) {
-  await createUserWithEmailAndPassword(auth, email, password);
+export async function registerApplication(payload: {
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  birthDate: string;
+  password: string;
+  smsConsent: boolean;
+}) {
+  await api("/auth/register-application", { method: "POST", body: JSON.stringify(payload) });
 }
 
 export async function logout() {
