@@ -1587,8 +1587,18 @@ const validateTeamLeaderIds = (ids: string[]) =>
   validateLeaderIds(ids, ["ADMIN", "EVENT_LEADER", "TEAM_LEADER"], "team");
 
 async function validateEventTemplate(body: z.infer<typeof eventTemplateInput>) {
-  await validateEventLeaderIds(body.eventLeaderUserIds);
-  for (const team of body.teams) await validateTeamLeaderIds(team.leaderUserIds);
+  for (const team of body.teams) {
+    const ministry = await get<{ id: string }>("select id from ministries where name=$1 and is_active", [team.name]);
+    if (team.name !== "Open" && !ministry) throw new ApiError("One or more selected ministries are invalid", 422);
+  }
+}
+
+function normalizeEventTemplate(body: z.infer<typeof eventTemplateInput>): z.infer<typeof eventTemplateInput> {
+  return {
+    ...body,
+    eventLeaderUserIds: [],
+    teams: body.teams.map((team) => ({ ...team, leaderUserIds: [] }))
+  };
 }
 
 function eventTemplateIntervalDays(interval: z.infer<typeof eventTemplateScheduleInput>["interval"]) {
@@ -1626,13 +1636,21 @@ app.post(
   route(async (req, res) => {
     const body = eventTemplateInput.parse(req.body);
     await validateEventTemplate(body);
+    const templateBody = normalizeEventTemplate(body);
     const template = await get<Record<string, unknown>>(
       `insert into event_templates(
         name, description, event_leader_user_ids, teams, created_by, is_active
        )
        values($1,$2,$3,$4::jsonb,$5,$6)
        returning *`,
-      [body.name, body.description, body.eventLeaderUserIds, JSON.stringify(body.teams), req.user!.id, body.isActive]
+      [
+        templateBody.name,
+        templateBody.description,
+        templateBody.eventLeaderUserIds,
+        JSON.stringify(templateBody.teams),
+        req.user!.id,
+        templateBody.isActive
+      ]
     );
     await audit(req.user!.id, "EVENT_TEMPLATE_CREATED", "event_template", String(template!.id));
     res.status(201).json(template);
@@ -1647,6 +1665,7 @@ app.patch(
     const id = uuid.parse(req.params.id);
     const body = eventTemplateInput.parse(req.body);
     await validateEventTemplate(body);
+    const templateBody = normalizeEventTemplate(body);
     const existing = await get<{ created_by: string }>("select created_by from event_templates where id=$1", [id]);
     if (!existing) throw new ApiError("Event template not found", 404);
     const isAdmin = hasRole(req.user!, "ADMIN");
@@ -1656,7 +1675,14 @@ app.patch(
       `update event_templates set
          name=$2, description=$3, event_leader_user_ids=$4, teams=$5::jsonb, is_active=$6
        where id=$1 returning *`,
-      [id, body.name, body.description, body.eventLeaderUserIds, JSON.stringify(body.teams), body.isActive]
+      [
+        id,
+        templateBody.name,
+        templateBody.description,
+        templateBody.eventLeaderUserIds,
+        JSON.stringify(templateBody.teams),
+        templateBody.isActive
+      ]
     );
     await audit(req.user!.id, "EVENT_TEMPLATE_UPDATED", "event_template", id);
     res.json(template);
@@ -1690,8 +1716,6 @@ app.post(
       [id, isAdmin, req.user!.id]
     );
     if (!template) throw new ApiError("Event template not found", 404);
-    for (const team of template.teams) await validateTeamLeaderIds(team.leaderUserIds);
-
     const intervalDays = eventTemplateIntervalDays(body.interval);
     const created = await transaction(async (client) => {
       const eventIds: string[] = [];
@@ -1729,7 +1753,7 @@ app.post(
               team.name,
               team.description,
               team.instructions,
-              team.leaderUserIds,
+              [],
               team.requiredVolunteerCount,
               team.signupPolicy,
               team.movementPolicy,

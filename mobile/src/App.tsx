@@ -4239,7 +4239,7 @@ const blankEventTemplateForm: EventTemplateForm = {
 };
 
 const blankEventTemplateTeam: EventTemplateTeam = {
-  name: "",
+  name: "Open",
   description: "",
   instructions: "",
   leaderUserIds: [],
@@ -4251,8 +4251,7 @@ const blankEventTemplateTeam: EventTemplateTeam = {
 
 function EventTemplateManager({ notify, close }: { notify: (message: string) => void; close: () => void }) {
   const [templates, setTemplates] = useState<EventTemplate[]>([]);
-  const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
-  const [teamLeaders, setTeamLeaders] = useState<EventLeader[]>([]);
+  const [ministries, setMinistries] = useState<Ministry[]>([]);
   const [selected, setSelected] = useState<EventTemplate | null>(null);
   const [form, setForm] = useState<EventTemplateForm>(blankEventTemplateForm);
   const [teams, setTeams] = useState<EventTemplateTeam[]>([]);
@@ -4268,11 +4267,8 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
 
   useEffect(() => {
     void loadTemplates();
-    api<{ eventLeaders: EventLeader[]; teamLeaders: EventLeader[] }>("/tools/event-template-leaders")
-      .then((leaderRows) => {
-        setEventLeaders(leaderRows.eventLeaders);
-        setTeamLeaders(leaderRows.teamLeaders);
-      })
+    api<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>("/catalog")
+      .then((catalog) => setMinistries(catalog.ministries))
       .catch((error) => notify((error as Error).message));
   }, []);
 
@@ -4313,7 +4309,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
       name: String(formData.get(`teamName-${index}`) ?? "").trim(),
       description: String(formData.get(`teamDescription-${index}`) ?? "").trim(),
       instructions: String(formData.get(`teamInstructions-${index}`) ?? "").trim(),
-      leaderUserIds: formData.getAll(`teamLeaderUserIds-${index}`).map(String),
+      leaderUserIds: [],
       requiredVolunteerCount: Number(formData.get(`teamRequiredVolunteerCount-${index}`) ?? 0),
       signupPolicy: String(formData.get(`teamSignupPolicy-${index}`)) as EventTemplateTeam["signupPolicy"],
       movementPolicy: String(formData.get(`teamMovementPolicy-${index}`)) as EventTemplateTeam["movementPolicy"],
@@ -4326,7 +4322,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
         body: JSON.stringify({
           name: form.name,
           description: form.description,
-          eventLeaderUserIds: formData.getAll("eventLeaderUserIds").map(String),
+          eventLeaderUserIds: [],
           teams: teamPayload,
           isActive: form.isActive
         })
@@ -4442,12 +4438,6 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                 rows={3}
               />
             </label>
-            <LeaderSelector
-              key={`event-leaders-${selected?.id ?? "new"}`}
-              leaders={eventLeaders}
-              selectedIds={selected?.event_leader_user_ids ?? []}
-            />
-
             <section className="event-template-teams">
               <div className="card-header">
                 <div>
@@ -4473,7 +4463,31 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                         </button>
                       )}
                     </div>
-                    <Field name={`teamName-${index}`} label="Team name" defaultValue={team.name} />
+                    <label>
+                      Ministry
+                      <select
+                        name={`teamName-${index}`}
+                        value={team.name || "Open"}
+                        onChange={(event) => updateTeam(index, { name: event.target.value })}
+                        disabled={readOnly}
+                        required
+                      >
+                        <option value="Open">Open</option>
+                        {team.name &&
+                          team.name !== "Open" &&
+                          !ministries.some((ministry) => ministry.name === team.name) && (
+                            <option value={team.name}>{team.name}</option>
+                          )}
+                        {ministries.map((ministry) => (
+                          <option key={ministry.id} value={ministry.name}>
+                            {ministry.name}
+                          </option>
+                        ))}
+                      </select>
+                      <small className="form-help">
+                        Open allows any volunteer from a participating campus to join.
+                      </small>
+                    </label>
                     <label>
                       Description
                       <textarea name={`teamDescription-${index}`} rows={2} defaultValue={team.description} />
@@ -4518,15 +4532,6 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
                         <option value="APPROVAL">Leader approval</option>
                       </select>
                     </label>
-                    <LeaderSelector
-                      key={`team-leaders-${selected?.id ?? "new"}-${index}`}
-                      leaders={teamLeaders}
-                      selectedIds={team.leaderUserIds}
-                      inputName={`teamLeaderUserIds-${index}`}
-                      title="Team leaders"
-                      searchPlaceholder="Search Administrators, Event Leaders, or Team Leaders"
-                      emptyMessage="No active Administrators, Event Leaders, or Team Leaders are available."
-                    />
                     <label className="check-label">
                       <input
                         name={`teamSelfCheckinEnabled-${index}`}
