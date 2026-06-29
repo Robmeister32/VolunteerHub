@@ -2267,7 +2267,9 @@ select:focus {
   color: #7a4e00;
   font-size: 0.75rem;
   font-weight: 700;
-  background: #f8d66d;
+  /* background: #f8d66d; */
+  background: var(--teal);
+
   border-radius: 20px;
 }
 .tools-card-grid {
