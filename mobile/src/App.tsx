@@ -2727,14 +2727,19 @@ function Applications({
     void load();
   }, []);
   const decide = async (id: string, status: "APPROVED" | "REJECTED", screenerScore?: number) => {
-    await api(`/applications/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status, screenerScore })
-    });
-    notify(`Application ${status.toLowerCase()}.`);
-    await load();
-    setSelectedApplication(null);
-    onApplicationsChanged?.();
+    if (!window.confirm(`${status === "APPROVED" ? "Approving" : "Rejecting"}.\n\nAre you sure?`)) return;
+    try {
+      await api(`/applications/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, screenerScore })
+      });
+      notify(`Application ${status.toLowerCase()}.`);
+      await load();
+      setSelectedApplication(null);
+      onApplicationsChanged?.();
+    } catch (error) {
+      notify((error as Error).message);
+    }
   };
 
   if (selectedApplication) {
@@ -2797,15 +2802,15 @@ function Applications({
             </div>
           </div>
           <div className="card-actions">
-            <button className="primary" type="submit">
-              <Check size={16} /> Approve application
-            </button>
             <button
               className="secondary danger"
               type="button"
               onClick={() => decide(selectedApplication.id, "REJECTED")}
             >
               <X size={16} /> Reject
+            </button>
+            <button className="primary" type="submit">
+              <Check size={16} /> Approve application
             </button>
           </div>
         </form>
