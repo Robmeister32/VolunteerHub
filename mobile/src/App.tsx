@@ -413,8 +413,7 @@ function eventHasPassed(event: Pick<EventItem, "ends_at">) {
 
 function eventNeedsAction(event: Pick<EventItem, "status" | "ends_at">) {
   return (
-    event.status === "DRAFT" ||
-    (eventHasPassed(event) && !["COMPLETE", "CANCELLED", "REMOVED"].includes(event.status))
+    event.status === "DRAFT" || (eventHasPassed(event) && !["COMPLETE", "CANCELLED", "REMOVED"].includes(event.status))
   );
 }
 
@@ -4258,6 +4257,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
   const [form, setForm] = useState<EventTemplateForm>(blankEventTemplateForm);
   const [teams, setTeams] = useState<EventTemplateTeam[]>([]);
   const [saving, setSaving] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const loadTemplates = useCallback(
     () =>
       api<EventTemplate[]>("/tools/event-templates")
@@ -4280,6 +4280,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
     setSelected(null);
     setForm({ ...blankEventTemplateForm });
     setTeams([]);
+    setEditorOpen(true);
   };
 
   const chooseTemplate = (template: EventTemplate) => {
@@ -4290,6 +4291,14 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
       isActive: template.is_active
     });
     setTeams(template.teams);
+    setEditorOpen(true);
+  };
+
+  const backToList = () => {
+    setEditorOpen(false);
+    setSelected(null);
+    setForm({ ...blankEventTemplateForm });
+    setTeams([]);
   };
 
   const updateTeam = (index: number, patch: Partial<EventTemplateTeam>) => {
@@ -4323,7 +4332,7 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
         })
       });
       await loadTemplates();
-      startNew();
+      backToList();
       notify(selected ? "Event template updated." : "Event template created.");
     } catch (error) {
       notify((error as Error).message);
@@ -4336,213 +4345,233 @@ function EventTemplateManager({ notify, close }: { notify: (message: string) => 
 
   return (
     <>
-      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Event templates" }]} />
+      <Breadcrumbs
+        items={
+          editorOpen
+            ? [
+                { label: "Tools", onClick: close },
+                { label: "Event templates", onClick: backToList },
+                { label: selected ? selected.name : "Create event template" }
+              ]
+            : [{ label: "Tools", onClick: close }, { label: "Event templates" }]
+        }
+      />
       <PageTitle
         eyebrow="Planning tools"
-        title="Event Templates"
-        description="Preconfigure event details and teams for future bulk scheduling."
+        title={editorOpen ? (selected ? "Edit Event Template" : "Create Event Template") : "Event Templates"}
+        description={
+          editorOpen
+            ? "Define reusable event details and the teams that should be created with it."
+            : "Preconfigure event details and teams for future bulk scheduling."
+        }
       />
-      <div className="email-template-layout event-template-layout">
-        <aside className="card email-template-list">
-          <div className="card-header">
-            <div>
-              <span className="eyebrow">Template library</span>
-              <h3>{templates.length} event templates</h3>
-            </div>
-            <button className="secondary" type="button" onClick={startNew}>
-              <Plus size={16} /> New
-            </button>
-          </div>
-          <div className="email-template-list-items">
-            {templates.map((template) => (
-              <button
-                key={template.id}
-                className={
-                  selected?.id === template.id ? "email-template-list-item active" : "email-template-list-item"
-                }
-                onClick={() => chooseTemplate(template)}
-              >
-                <span className="email-template-list-icon">
-                  <CalendarDays size={17} />
-                </span>
-                <span className="grow">
-                  <strong>{template.name}</strong>
-                  <small>
-                    {template.teams.length} team{template.teams.length === 1 ? "" : "s"}
-                  </small>
-                </span>
-                {!template.is_active && <span className="status neutral">Inactive</span>}
-                <ChevronRight size={17} />
-              </button>
-            ))}
-            {!templates.length && <p className="empty-state">No event templates yet. Create the first one.</p>}
-          </div>
-        </aside>
-
-        <form
-          key={selected?.id ?? "new-event-template"}
-          className="card email-template-editor event-template-editor"
-          onSubmit={save}
-        >
-          <MaintenanceFormTitle
-            icon={<CalendarDays />}
-            title={selected ? selected.name : "Create event template"}
-            description={
-              readOnly
-                ? `Shared by ${selected?.creator_name}`
-                : "Define reusable event details and the teams that should be created with it."
-            }
-          />
-          {readOnly && (
-            <div className="template-readonly-note">
-              This shared event template is read-only. Create a new template to customize it.
-            </div>
-          )}
-          <label>
-            Template name
-            <input
-              value={form.name}
-              onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))}
-              disabled={readOnly}
-              required
-            />
-          </label>
-          <label>
-            Description
-            <textarea
-              value={form.description}
-              onChange={(event) => setForm((value) => ({ ...value, description: event.target.value }))}
-              disabled={readOnly}
-              rows={3}
-            />
-          </label>
-          <LeaderSelector
-            key={`event-leaders-${selected?.id ?? "new"}`}
-            leaders={eventLeaders}
-            selectedIds={selected?.event_leader_user_ids ?? []}
-          />
-
-          <section className="event-template-teams">
+      <div className={editorOpen ? "template-form-page" : "email-template-layout event-template-layout"}>
+        {!editorOpen && (
+          <aside className="card email-template-list">
             <div className="card-header">
               <div>
-                <span className="eyebrow">Event teams</span>
-                <h3>{teams.length} configured</h3>
+                <span className="eyebrow">Template library</span>
+                <h3>{templates.length} event templates</h3>
               </div>
+              <button className="secondary" type="button" onClick={startNew}>
+                <Plus size={16} /> New
+              </button>
             </div>
-            <div className="event-template-team-list">
-              {teams.map((team, index) => (
-                <article className="event-template-team-card" key={`${selected?.id ?? "new"}-${index}`}>
-                  <div className="card-header">
-                    <div>
-                      <span className="eyebrow">Team {index + 1}</span>
-                      <h3>{team.name || "New event team"}</h3>
+            <div className="email-template-list-items">
+              {templates.map((template) => (
+                <button
+                  key={template.id}
+                  className={
+                    selected?.id === template.id ? "email-template-list-item active" : "email-template-list-item"
+                  }
+                  onClick={() => chooseTemplate(template)}
+                >
+                  <span className="email-template-list-icon">
+                    <CalendarDays size={17} />
+                  </span>
+                  <span className="grow">
+                    <strong>{template.name}</strong>
+                    <small>
+                      {template.teams.length} team{template.teams.length === 1 ? "" : "s"}
+                    </small>
+                  </span>
+                  {!template.is_active && <span className="status neutral">Inactive</span>}
+                  <ChevronRight size={17} />
+                </button>
+              ))}
+              {!templates.length && <p className="empty-state">No event templates yet. Create the first one.</p>}
+            </div>
+          </aside>
+        )}
+
+        {editorOpen && (
+          <form
+            key={selected?.id ?? "new-event-template"}
+            className="card email-template-editor event-template-editor"
+            onSubmit={save}
+          >
+            <MaintenanceFormTitle
+              icon={<CalendarDays />}
+              title={selected ? selected.name : "Create event template"}
+              description={
+                readOnly
+                  ? `Shared by ${selected?.creator_name}`
+                  : "Define reusable event details and the teams that should be created with it."
+              }
+            />
+            {readOnly && (
+              <div className="template-readonly-note">
+                This shared event template is read-only. Create a new template to customize it.
+              </div>
+            )}
+            <label>
+              Template name
+              <input
+                value={form.name}
+                onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))}
+                disabled={readOnly}
+                required
+              />
+            </label>
+            <label>
+              Description
+              <textarea
+                value={form.description}
+                onChange={(event) => setForm((value) => ({ ...value, description: event.target.value }))}
+                disabled={readOnly}
+                rows={3}
+              />
+            </label>
+            <LeaderSelector
+              key={`event-leaders-${selected?.id ?? "new"}`}
+              leaders={eventLeaders}
+              selectedIds={selected?.event_leader_user_ids ?? []}
+            />
+
+            <section className="event-template-teams">
+              <div className="card-header">
+                <div>
+                  <span className="eyebrow">Event teams</span>
+                  <h3>{teams.length} configured</h3>
+                </div>
+              </div>
+              <div className="event-template-team-list">
+                {teams.map((team, index) => (
+                  <article className="event-template-team-card" key={`${selected?.id ?? "new"}-${index}`}>
+                    <div className="card-header">
+                      <div>
+                        <span className="eyebrow">Team {index + 1}</span>
+                        <h3>{team.name || "New event team"}</h3>
+                      </div>
+                      {!readOnly && teams.length > 1 && (
+                        <button
+                          className="secondary danger"
+                          type="button"
+                          onClick={() => setTeams((current) => current.filter((_, teamIndex) => teamIndex !== index))}
+                        >
+                          <X size={16} /> Remove
+                        </button>
+                      )}
                     </div>
-                    {!readOnly && teams.length > 1 && (
-                      <button
-                        className="secondary danger"
-                        type="button"
-                        onClick={() => setTeams((current) => current.filter((_, teamIndex) => teamIndex !== index))}
-                      >
-                        <X size={16} /> Remove
-                      </button>
-                    )}
-                  </div>
-                  <Field name={`teamName-${index}`} label="Team name" defaultValue={team.name} />
-                  <label>
-                    Description
-                    <textarea name={`teamDescription-${index}`} rows={2} defaultValue={team.description} />
-                  </label>
-                  <label>
-                    Instructions
-                    <textarea name={`teamInstructions-${index}`} rows={2} defaultValue={team.instructions} />
-                  </label>
-                  <div className="two-col">
-                    <Field
-                      name={`teamRequiredVolunteerCount-${index}`}
-                      label="Volunteers required"
-                      type="number"
-                      defaultValue={team.requiredVolunteerCount}
-                    />
+                    <Field name={`teamName-${index}`} label="Team name" defaultValue={team.name} />
                     <label>
-                      Signup policy
+                      Description
+                      <textarea name={`teamDescription-${index}`} rows={2} defaultValue={team.description} />
+                    </label>
+                    <label>
+                      Instructions
+                      <textarea name={`teamInstructions-${index}`} rows={2} defaultValue={team.instructions} />
+                    </label>
+                    <div className="two-col">
+                      <Field
+                        name={`teamRequiredVolunteerCount-${index}`}
+                        label="Volunteers required"
+                        type="number"
+                        defaultValue={team.requiredVolunteerCount}
+                      />
+                      <label>
+                        Signup policy
+                        <select
+                          name={`teamSignupPolicy-${index}`}
+                          defaultValue={team.signupPolicy}
+                          onChange={(event) =>
+                            updateTeam(index, { signupPolicy: event.target.value as EventTemplateTeam["signupPolicy"] })
+                          }
+                        >
+                          <option value="AUTO">Automatic confirmation</option>
+                          <option value="APPROVAL">Leader approval</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label>
+                      Move/swap policy
                       <select
-                        name={`teamSignupPolicy-${index}`}
-                        defaultValue={team.signupPolicy}
+                        name={`teamMovementPolicy-${index}`}
+                        defaultValue={team.movementPolicy}
                         onChange={(event) =>
-                          updateTeam(index, { signupPolicy: event.target.value as EventTemplateTeam["signupPolicy"] })
+                          updateTeam(index, {
+                            movementPolicy: event.target.value as EventTemplateTeam["movementPolicy"]
+                          })
                         }
                       >
                         <option value="AUTO">Automatic confirmation</option>
                         <option value="APPROVAL">Leader approval</option>
                       </select>
                     </label>
-                  </div>
-                  <label>
-                    Move/swap policy
-                    <select
-                      name={`teamMovementPolicy-${index}`}
-                      defaultValue={team.movementPolicy}
-                      onChange={(event) =>
-                        updateTeam(index, { movementPolicy: event.target.value as EventTemplateTeam["movementPolicy"] })
-                      }
-                    >
-                      <option value="AUTO">Automatic confirmation</option>
-                      <option value="APPROVAL">Leader approval</option>
-                    </select>
-                  </label>
-                  <LeaderSelector
-                    key={`team-leaders-${selected?.id ?? "new"}-${index}`}
-                    leaders={teamLeaders}
-                    selectedIds={team.leaderUserIds}
-                    inputName={`teamLeaderUserIds-${index}`}
-                    title="Team leaders"
-                    searchPlaceholder="Search Administrators, Event Leaders, or Team Leaders"
-                    emptyMessage="No active Administrators, Event Leaders, or Team Leaders are available."
-                  />
-                  <label className="check-label">
-                    <input
-                      name={`teamSelfCheckinEnabled-${index}`}
-                      type="checkbox"
-                      defaultChecked={team.selfCheckinEnabled}
+                    <LeaderSelector
+                      key={`team-leaders-${selected?.id ?? "new"}-${index}`}
+                      leaders={teamLeaders}
+                      selectedIds={team.leaderUserIds}
+                      inputName={`teamLeaderUserIds-${index}`}
+                      title="Team leaders"
+                      searchPlaceholder="Search Administrators, Event Leaders, or Team Leaders"
+                      emptyMessage="No active Administrators, Event Leaders, or Team Leaders are available."
                     />
-                    Enable location-bound self check-in
-                  </label>
-                </article>
-              ))}
-              {!teams.length && <Empty text="No event teams have been added to this template." />}
-            </div>
-            {!readOnly && (
-              <button
-                className="secondary full"
-                type="button"
-                onClick={() => setTeams((current) => [...current, { ...blankEventTemplateTeam }])}
-              >
-                <Plus size={16} /> Add team
-              </button>
-            )}
-          </section>
-
-          {!readOnly && (
-            <div className="email-template-actions">
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={form.isActive}
-                  onChange={(event) => setForm((value) => ({ ...value, isActive: event.target.checked }))}
-                />
-                Active template
-              </label>
-              <div className="card-actions">
-                <button className="secondary" type="button" onClick={startNew}>
-                  Clear
-                </button>
-                <button className="primary" disabled={saving}>
-                  {saving ? "Saving..." : selected ? "Save changes" : "Create template"}
-                </button>
+                    <label className="check-label">
+                      <input
+                        name={`teamSelfCheckinEnabled-${index}`}
+                        type="checkbox"
+                        defaultChecked={team.selfCheckinEnabled}
+                      />
+                      Enable location-bound self check-in
+                    </label>
+                  </article>
+                ))}
+                {!teams.length && <Empty text="No event teams have been added to this template." />}
               </div>
-            </div>
-          )}
-        </form>
+              {!readOnly && (
+                <button
+                  className="secondary full"
+                  type="button"
+                  onClick={() => setTeams((current) => [...current, { ...blankEventTemplateTeam }])}
+                >
+                  <Plus size={16} /> Add team
+                </button>
+              )}
+            </section>
+
+            {!readOnly && (
+              <div className="email-template-actions">
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={form.isActive}
+                    onChange={(event) => setForm((value) => ({ ...value, isActive: event.target.checked }))}
+                  />
+                  Active template
+                </label>
+                <div className="card-actions">
+                  <button className="secondary" type="button" onClick={startNew}>
+                    Clear
+                  </button>
+                  <button className="primary" disabled={saving}>
+                    {saving ? "Saving..." : selected ? "Save changes" : "Create template"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </form>
+        )}
       </div>
     </>
   );
@@ -4569,6 +4598,7 @@ function EmailTemplateManager({ notify, close }: { notify: (message: string) => 
   const [form, setForm] = useState<EmailTemplateForm>(blankEmailTemplate);
   const [saving, setSaving] = useState(false);
   const [lastField, setLastField] = useState<"subject" | "body">("body");
+  const [editorOpen, setEditorOpen] = useState(false);
   const subjectRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const loadTemplates = useCallback(
@@ -4589,6 +4619,7 @@ function EmailTemplateManager({ notify, close }: { notify: (message: string) => 
   const startNew = () => {
     setSelected(null);
     setForm({ ...blankEmailTemplate });
+    setEditorOpen(true);
   };
 
   const chooseTemplate = (template: EmailTemplate) => {
@@ -4599,6 +4630,13 @@ function EmailTemplateManager({ notify, close }: { notify: (message: string) => 
       body: template.body,
       isActive: template.is_active
     });
+    setEditorOpen(true);
+  };
+
+  const backToList = () => {
+    setEditorOpen(false);
+    setSelected(null);
+    setForm({ ...blankEmailTemplate });
   };
 
   const insertVariable = (token: string, field = lastField) => {
@@ -4632,7 +4670,7 @@ function EmailTemplateManager({ notify, close }: { notify: (message: string) => 
         body: JSON.stringify(form)
       });
       await loadTemplates();
-      startNew();
+      backToList();
       notify(selected ? "Email template updated" : "Email template created");
     } catch (error) {
       notify((error as Error).message);
@@ -4647,155 +4685,173 @@ function EmailTemplateManager({ notify, close }: { notify: (message: string) => 
 
   return (
     <>
-      <Breadcrumbs items={[{ label: "Tools", onClick: close }, { label: "Email templates" }]} />
+      <Breadcrumbs
+        items={
+          editorOpen
+            ? [
+                { label: "Tools", onClick: close },
+                { label: "Email templates", onClick: backToList },
+                { label: selected ? selected.name : "Create email template" }
+              ]
+            : [{ label: "Tools", onClick: close }, { label: "Email templates" }]
+        }
+      />
       <PageTitle
         eyebrow="Communication tools"
-        title="Email Templates"
-        description="Write once, then personalize every message with dynamic variables."
+        title={editorOpen ? (selected ? "Edit Email Template" : "Create Email Template") : "Email Templates"}
+        description={
+          editorOpen
+            ? "Write the subject, body, variables, and preview for this email template."
+            : "Write once, then personalize every message with dynamic variables."
+        }
       />
-      <div className="email-template-layout">
-        <aside className="card email-template-list">
-          <div className="card-header">
-            <div>
-              <span className="eyebrow">Template library</span>
-              <h3>{templates.length} templates</h3>
-            </div>
-            <button className="secondary" type="button" onClick={startNew}>
-              <Plus size={16} /> New
-            </button>
-          </div>
-          <div className="email-template-list-items">
-            {templates.map((template) => (
-              <button
-                key={template.id}
-                className={
-                  selected?.id === template.id ? "email-template-list-item active" : "email-template-list-item"
-                }
-                onClick={() => chooseTemplate(template)}
-              >
-                <span className="email-template-list-icon">
-                  <Mail size={17} />
-                </span>
-                <span className="grow">
-                  <strong>{template.name}</strong>
-                  <small>{template.can_edit ? "Editable" : `Shared by ${template.creator_name}`}</small>
-                </span>
-                {!template.is_active && <span className="status neutral">Inactive</span>}
-                <ChevronRight size={17} />
+      <div className={editorOpen ? "template-form-page" : "email-template-layout"}>
+        {!editorOpen && (
+          <aside className="card email-template-list">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">Template library</span>
+                <h3>{templates.length} templates</h3>
+              </div>
+              <button className="secondary" type="button" onClick={startNew}>
+                <Plus size={16} /> New
               </button>
-            ))}
-            {!templates.length && <p className="empty-state">No email templates yet. Create the first one.</p>}
-          </div>
-        </aside>
-
-        <form className="card email-template-editor" onSubmit={save}>
-          <MaintenanceFormTitle
-            icon={<Mail />}
-            title={selected ? selected.name : "Create email template"}
-            description={
-              readOnly ? `Shared by ${selected?.creator_name}` : "Drag variables into the subject or email body."
-            }
-          />
-          {readOnly && (
-            <div className="template-readonly-note">
-              This shared template is read-only. Create a new template to customize it.
             </div>
-          )}
-          <label>
-            Template name
-            <input
-              value={form.name}
-              onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))}
-              placeholder="Volunteer reminder"
-              disabled={readOnly}
-              required
-            />
-          </label>
-          <label>
-            Email subject
-            <input
-              ref={subjectRef}
-              value={form.subject}
-              onFocus={() => setLastField("subject")}
-              onChange={(event) => setForm((value) => ({ ...value, subject: event.target.value }))}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => dropVariable(event, "subject")}
-              placeholder="You're scheduled for {{event.name}}"
-              disabled={readOnly}
-              required
-            />
-          </label>
-          <label>
-            Email body
-            <textarea
-              ref={bodyRef}
-              value={form.body}
-              onFocus={() => setLastField("body")}
-              onChange={(event) => setForm((value) => ({ ...value, body: event.target.value }))}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => dropVariable(event, "body")}
-              rows={12}
-              placeholder={
-                "Hi {{volunteer.first_name}},\n\nThank you for serving with {{team.name}} at {{event.name}}."
-              }
-              disabled={readOnly}
-              required
-            />
-          </label>
-
-          <div className="email-variable-panel">
-            <div>
-              <strong>Email variables</strong>
-              <small>Drag a variable into a field, or click one to insert it at your cursor.</small>
-            </div>
-            <div className="email-variable-chips">
-              {variables.map((variable) => (
+            <div className="email-template-list-items">
+              {templates.map((template) => (
                 <button
-                  key={variable.token}
-                  type="button"
-                  className="email-variable-chip"
-                  draggable={!readOnly}
-                  disabled={readOnly}
-                  title={variable.description}
-                  onDragStart={(event) => event.dataTransfer.setData("text/plain", variable.token)}
-                  onClick={() => insertVariable(variable.token)}
+                  key={template.id}
+                  className={
+                    selected?.id === template.id ? "email-template-list-item active" : "email-template-list-item"
+                  }
+                  onClick={() => chooseTemplate(template)}
                 >
-                  <GripVertical size={14} />
-                  <span>
-                    <strong>{variable.label}</strong>
-                    <small>{variable.token}</small>
+                  <span className="email-template-list-icon">
+                    <Mail size={17} />
                   </span>
+                  <span className="grow">
+                    <strong>{template.name}</strong>
+                    <small>{template.can_edit ? "Editable" : `Shared by ${template.creator_name}`}</small>
+                  </span>
+                  {!template.is_active && <span className="status neutral">Inactive</span>}
+                  <ChevronRight size={17} />
                 </button>
               ))}
+              {!templates.length && <p className="empty-state">No email templates yet. Create the first one.</p>}
             </div>
-          </div>
+          </aside>
+        )}
 
-          <div className="email-template-preview">
-            <span className="eyebrow">Live preview</span>
-            <strong>{preview(form.subject) || "Your email subject will appear here"}</strong>
-            <p>{preview(form.body) || "Your personalized email body will appear here."}</p>
-          </div>
-          {!readOnly && (
-            <div className="email-template-actions">
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={form.isActive}
-                  onChange={(event) => setForm((value) => ({ ...value, isActive: event.target.checked }))}
-                />
-                Active template
-              </label>
-              <div className="card-actions">
-                <button className="secondary" type="button" onClick={startNew}>
-                  Clear
-                </button>
-                <button className="primary" disabled={saving}>
-                  {saving ? "Saving..." : selected ? "Save changes" : "Create template"}
-                </button>
+        {editorOpen && (
+          <form className="card email-template-editor" onSubmit={save}>
+            <MaintenanceFormTitle
+              icon={<Mail />}
+              title={selected ? selected.name : "Create email template"}
+              description={
+                readOnly ? `Shared by ${selected?.creator_name}` : "Drag variables into the subject or email body."
+              }
+            />
+            {readOnly && (
+              <div className="template-readonly-note">
+                This shared template is read-only. Create a new template to customize it.
+              </div>
+            )}
+            <label>
+              Template name
+              <input
+                value={form.name}
+                onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))}
+                placeholder="Volunteer reminder"
+                disabled={readOnly}
+                required
+              />
+            </label>
+            <label>
+              Email subject
+              <input
+                ref={subjectRef}
+                value={form.subject}
+                onFocus={() => setLastField("subject")}
+                onChange={(event) => setForm((value) => ({ ...value, subject: event.target.value }))}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => dropVariable(event, "subject")}
+                placeholder="You're scheduled for {{event.name}}"
+                disabled={readOnly}
+                required
+              />
+            </label>
+            <label>
+              Email body
+              <textarea
+                ref={bodyRef}
+                value={form.body}
+                onFocus={() => setLastField("body")}
+                onChange={(event) => setForm((value) => ({ ...value, body: event.target.value }))}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => dropVariable(event, "body")}
+                rows={12}
+                placeholder={
+                  "Hi {{volunteer.first_name}},\n\nThank you for serving with {{team.name}} at {{event.name}}."
+                }
+                disabled={readOnly}
+                required
+              />
+            </label>
+
+            <div className="email-variable-panel">
+              <div>
+                <strong>Email variables</strong>
+                <small>Drag a variable into a field, or click one to insert it at your cursor.</small>
+              </div>
+              <div className="email-variable-chips">
+                {variables.map((variable) => (
+                  <button
+                    key={variable.token}
+                    type="button"
+                    className="email-variable-chip"
+                    draggable={!readOnly}
+                    disabled={readOnly}
+                    title={variable.description}
+                    onDragStart={(event) => event.dataTransfer.setData("text/plain", variable.token)}
+                    onClick={() => insertVariable(variable.token)}
+                  >
+                    <GripVertical size={14} />
+                    <span>
+                      <strong>{variable.label}</strong>
+                      <small>{variable.token}</small>
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
-          )}
-        </form>
+
+            <div className="email-template-preview">
+              <span className="eyebrow">Live preview</span>
+              <strong>{preview(form.subject) || "Your email subject will appear here"}</strong>
+              <p>{preview(form.body) || "Your personalized email body will appear here."}</p>
+            </div>
+            {!readOnly && (
+              <div className="email-template-actions">
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={form.isActive}
+                    onChange={(event) => setForm((value) => ({ ...value, isActive: event.target.checked }))}
+                  />
+                  Active template
+                </label>
+                <div className="card-actions">
+                  <button className="secondary" type="button" onClick={startNew}>
+                    Clear
+                  </button>
+                  <button className="primary" disabled={saving}>
+                    {saving ? "Saving..." : selected ? "Save changes" : "Create template"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </form>
+        )}
       </div>
     </>
   );
@@ -4976,6 +5032,12 @@ function TaskAssignmentMaintenance({
     setFormOpen(true);
   };
 
+  const backToTaskList = () => {
+    setEditingTask(null);
+    setSelectedEventId("");
+    setFormOpen(false);
+  };
+
   const normalizedSearch = searchTerm.trim().toLowerCase();
   const filteredTasks = tasks.filter(
     (task) =>
@@ -4998,34 +5060,122 @@ function TaskAssignmentMaintenance({
 
   return (
     <>
-      <Breadcrumbs items={[{ label: parentLabel, onClick: close }, { label: "Assign Tasks" }]} />
+      <Breadcrumbs
+        items={
+          formOpen
+            ? [
+                { label: parentLabel, onClick: close },
+                { label: "Assign Tasks", onClick: backToTaskList },
+                { label: editingTask ? "Edit task" : "Assign task" }
+              ]
+            : [{ label: parentLabel, onClick: close }, { label: "Assign Tasks" }]
+        }
+      />
       <PageTitle
         eyebrow={parentLabel}
-        title="Assign Tasks"
-        description="Create operational tasks for volunteers serving with an active event team."
-      />
-      <Card
-        title="Tasks"
-        action={
-          <button onClick={openCreateForm}>
-            <Plus size={16} /> Assign task
-          </button>
+        title={formOpen ? (editingTask ? "Edit Task" : "Assign Task") : "Assign Tasks"}
+        description={
+          formOpen
+            ? editingTask
+              ? "Correct this task before work begins."
+              : "Confirmed volunteers on the selected team will receive this task."
+            : "Create operational tasks for volunteers serving with an active event team."
         }
-      >
-        <div className="maintenance-search">
-          <div className="search active">
-            <Search size={17} />
-            <input
-              type="search"
-              value={searchTerm}
-              placeholder="Search tasks"
-              aria-label="Search tasks"
-              onChange={(event) => setSearchTerm(event.target.value)}
+      />
+      {formOpen ? (
+        <form className="card campus-form campus-form-page" key={editingTask?.id ?? "new-task"} onSubmit={save}>
+          <MaintenanceFormTitle
+            icon={<ClipboardList size={19} />}
+            title={editingTask ? "Edit task" : "Assign task"}
+            description={
+              editingTask
+                ? "Correct this task before work begins."
+                : "Confirmed volunteers on the selected team will receive this task."
+            }
+          />
+          <label>
+            Event
+            <select value={selectedEventId} required onChange={(event) => setSelectedEventId(event.target.value)}>
+              <option value="">Select an event</option>
+              {events.map((event) => (
+                <option key={event.id} value={event.id}>
+                  {event.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Event group
+            <select
+              name="eventGroupId"
+              required
+              defaultValue={selectedEventId === editingTask?.event_id ? editingTask.event_group_id : ""}
+              key={`${selectedEventId}-${editingTask?.event_group_id ?? "new"}`}
+              disabled={!selectedEvent}
+            >
+              <option value="">Select an event group</option>
+              {selectedEvent?.groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Field name="title" label="Task title" defaultValue={editingTask?.title} />
+          <label>
+            Description
+            <textarea name="description" rows={4} defaultValue={editingTask?.description} />
+          </label>
+          <OptionalField name="location" label="Location" defaultValue={editingTask?.location} />
+          <div className="two-col">
+            <Field
+              name="requiredVolunteers"
+              label="Required volunteers"
+              type="number"
+              defaultValue={editingTask?.required_volunteers ?? 1}
             />
+            <label>
+              Priority
+              <select name="priority" defaultValue={editingTask?.priority ?? "NORMAL"}>
+                <option value="LOW">Low</option>
+                <option value="NORMAL">Normal</option>
+                <option value="HIGH">High</option>
+                <option value="URGENT">Urgent</option>
+              </select>
+            </label>
           </div>
-          <small>Newest tasks appear first</small>
-        </div>
-        <div className={formOpen ? "administration-grid" : ""}>
+          {!events.length && <small className="form-help">Create an active event team before assigning tasks.</small>}
+          <div className="card-actions">
+            <button className="primary" disabled={!events.length}>
+              {editingTask ? "Save changes" : "Assign task"}
+            </button>
+            <button className="secondary" type="button" onClick={backToTaskList}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        <Card
+          title="Tasks"
+          action={
+            <button onClick={openCreateForm}>
+              <Plus size={16} /> Assign task
+            </button>
+          }
+        >
+          <div className="maintenance-search">
+            <div className="search active">
+              <Search size={17} />
+              <input
+                type="search"
+                value={searchTerm}
+                placeholder="Search tasks"
+                aria-label="Search tasks"
+                onChange={(event) => setSearchTerm(event.target.value)}
+              />
+            </div>
+            <small>Newest tasks appear first</small>
+          </div>
           <div className="table campus-table">
             {filteredTasks.map((task) => {
               const taskDate = new Date(task.starts_at);
@@ -5057,90 +5207,8 @@ function TaskAssignmentMaintenance({
             })}
             {!filteredTasks.length && <Empty text="No tasks match your search." />}
           </div>
-          {formOpen && (
-            <form className="campus-form" key={editingTask?.id ?? "new-task"} onSubmit={save}>
-              <MaintenanceFormTitle
-                icon={<ClipboardList size={19} />}
-                title={editingTask ? "Edit task" : "Assign task"}
-                description={
-                  editingTask
-                    ? "Correct this task before work begins."
-                    : "Confirmed volunteers on the selected team will receive this task."
-                }
-              />
-              <label>
-                Event
-                <select value={selectedEventId} required onChange={(event) => setSelectedEventId(event.target.value)}>
-                  <option value="">Select an event</option>
-                  {events.map((event) => (
-                    <option key={event.id} value={event.id}>
-                      {event.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Event group
-                <select
-                  name="eventGroupId"
-                  required
-                  defaultValue={selectedEventId === editingTask?.event_id ? editingTask.event_group_id : ""}
-                  key={`${selectedEventId}-${editingTask?.event_group_id ?? "new"}`}
-                  disabled={!selectedEvent}
-                >
-                  <option value="">Select an event group</option>
-                  {selectedEvent?.groups.map((group) => (
-                    <option key={group.id} value={group.id}>
-                      {group.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Field name="title" label="Task title" defaultValue={editingTask?.title} />
-              <label>
-                Description
-                <textarea name="description" rows={4} defaultValue={editingTask?.description} />
-              </label>
-              <OptionalField name="location" label="Location" defaultValue={editingTask?.location} />
-              <div className="two-col">
-                <Field
-                  name="requiredVolunteers"
-                  label="Required volunteers"
-                  type="number"
-                  defaultValue={editingTask?.required_volunteers ?? 1}
-                />
-                <label>
-                  Priority
-                  <select name="priority" defaultValue={editingTask?.priority ?? "NORMAL"}>
-                    <option value="LOW">Low</option>
-                    <option value="NORMAL">Normal</option>
-                    <option value="HIGH">High</option>
-                    <option value="URGENT">Urgent</option>
-                  </select>
-                </label>
-              </div>
-              {!events.length && (
-                <small className="form-help">Create an active event team before assigning tasks.</small>
-              )}
-              <div className="card-actions">
-                <button className="primary" disabled={!events.length}>
-                  {editingTask ? "Save changes" : "Assign task"}
-                </button>
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={() => {
-                    setEditingTask(null);
-                    setFormOpen(false);
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      </Card>
+        </Card>
+      )}
     </>
   );
 }

@@ -2377,6 +2377,9 @@ select:focus {
 .email-template-editor {
   min-width: 0;
 }
+.template-form-page {
+  max-width: 880px;
+}
 .email-template-list {
   position: sticky;
   top: 90px;
