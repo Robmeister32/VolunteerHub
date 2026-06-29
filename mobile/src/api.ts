@@ -46,7 +46,9 @@ export function observeAuth(callback: (user: User | null) => void) {
 }
 
 function toSession(me: Record<string, unknown>): Session {
-  const roles = (me.roles as UserRole[]) ?? ["VOLUNTEER"];
+  const roles = (((me.roles as string[]) ?? ["VOLUNTEER"]).map((role) => role.toUpperCase()) as UserRole[]) ?? [
+    "VOLUNTEER"
+  ];
   return {
     id: String(me.id),
     name: String(me.display_name || me.email || "Volunteer"),
@@ -61,7 +63,9 @@ function toSession(me: Record<string, unknown>): Session {
           ? "TEAM_LEADER"
           : roles.includes("MINISTRY_HEAD")
             ? "MINISTRY_HEAD"
-            : "VOLUNTEER",
+            : roles.includes("SCREENER")
+              ? "SCREENER"
+              : "VOLUNTEER",
     volunteerId: me.volunteer_id ? String(me.volunteer_id) : undefined,
     ministryIds: (me.ministry_ids as string[]) ?? []
   };
@@ -84,7 +88,7 @@ export async function downloadExport(type: "volunteers" | "events" | "assignment
   URL.revokeObjectURL(url);
 }
 
-export type UserRole = "ADMIN" | "EVENT_LEADER" | "TEAM_LEADER" | "MINISTRY_HEAD" | "VOLUNTEER";
+export type UserRole = "ADMIN" | "EVENT_LEADER" | "TEAM_LEADER" | "MINISTRY_HEAD" | "SCREENER" | "VOLUNTEER";
 
 export interface Session {
   id: string;

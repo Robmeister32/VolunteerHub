@@ -2486,7 +2486,7 @@ app.post(
 app.get(
   "/api/applications",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "SCREENER"),
   route(async (_req, res) => {
     res.json(
       await all(
@@ -2499,7 +2499,7 @@ app.get(
 app.patch(
   "/api/applications/:id",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "SCREENER"),
   route(async (req, res) => {
     const id = uuid.parse(req.params.id);
     const body = z.object({ status: z.enum(["APPROVED", "REJECTED"]), reason: z.string().optional() }).parse(req.body);

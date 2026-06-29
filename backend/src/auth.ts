@@ -9,7 +9,7 @@ const firebaseAuth = getAuth(initializeFirebaseAdmin());
 export async function domainUser(firebaseUid: string): Promise<AuthUser | undefined> {
   const user = await get<{ id: string; auth_uid: string; email: string; roles: UserRole[]; volunteer_id?: string }>(
     `select u.id, u.auth_uid, u.email,
-       coalesce(array_agg(aur.role_code) filter (where aur.role_code is not null), '{}') roles,
+       coalesce(array_agg(upper(aur.role_code)) filter (where aur.role_code is not null), '{}') roles,
        v.id volunteer_id
      from volunteerhub.app_users u left join volunteerhub.volunteer_profiles v on v.app_user_id=u.id
      left join volunteerhub.app_user_roles aur on aur.user_id=u.id
@@ -54,12 +54,13 @@ export async function requireAuth(req: AuthedRequest, res: Response, next: NextF
 
 export function requireRole(...roles: UserRole[]) {
   return (req: AuthedRequest, res: Response, next: NextFunction) => {
-    if (!req.user || (!req.user.roles.includes("ADMIN") && !roles.some((role) => req.user!.roles.includes(role))))
+    const assignedRoles = req.user?.roles.map((role) => role.toUpperCase()) ?? [];
+    if (!req.user || (!assignedRoles.includes("ADMIN") && !roles.some((role) => assignedRoles.includes(role))))
       return res.status(403).json({ error: "Insufficient permission" });
     next();
   };
 }
 
 export function hasRole(user: AuthUser, role: UserRole) {
-  return user.roles.includes(role);
+  return user.roles.some((assignedRole) => assignedRole.toUpperCase() === role);
 }

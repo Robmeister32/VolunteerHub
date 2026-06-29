@@ -360,6 +360,7 @@ const roleLabels = {
   EVENT_LEADER: "Event leader",
   TEAM_LEADER: "Event team leader",
   MINISTRY_HEAD: "Ministry head",
+  SCREENER: "Screener",
   VOLUNTEER: "Volunteer"
 };
 const eventStatuses: Array<{ value: EventStatus; label: string }> = [
@@ -375,7 +376,11 @@ const demoAccounts = [
   { role: "VOLUNTEER", email: "volunteer@volunteerhub.local", description: "Events, household, and schedule" }
 ] as const;
 function hasRole(session: Session, role: UserRole) {
-  return session.roles.includes(role);
+  return session.roles.some((assignedRole) => assignedRole.toUpperCase() === role);
+}
+
+function canScreenApplications(session: Session) {
+  return hasRole(session, "ADMIN") || hasRole(session, "SCREENER");
 }
 
 function canManageEmailTemplates(session: Session) {
@@ -469,6 +474,7 @@ export function App() {
   const [activeTasks, setActiveTasks] = useState(0);
   const [pendingMinistryRequests, setPendingMinistryRequests] = useState(0);
   const [actionableEvents, setActionableEvents] = useState(0);
+  const [pendingApplications, setPendingApplications] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useEffect(
@@ -514,17 +520,24 @@ export function App() {
     const events = await api<EventItem[]>("/events");
     setActionableEvents(events.filter(eventNeedsAction).length);
   };
+  const refreshPendingApplications = async () => {
+    if (!session || !canScreenApplications(session)) return setPendingApplications(0);
+    const applications = await api<Array<Record<string, string | number>>>("/applications");
+    setPendingApplications(applications.filter((application) => application.application_status === "SUBMITTED").length);
+  };
   useEffect(() => {
     if (!session) return;
     void refreshUnreadMessages();
     void refreshActiveTasks();
     void refreshMinistryMembershipNotifications();
     void refreshEventNotifications();
+    void refreshPendingApplications();
     const timer = window.setInterval(() => {
       void refreshUnreadMessages();
       void refreshActiveTasks();
       void refreshMinistryMembershipNotifications();
       void refreshEventNotifications();
+      void refreshPendingApplications();
     }, 30_000);
     return () => window.clearInterval(timer);
   }, [session]);
@@ -552,8 +565,9 @@ export function App() {
     );
   if (!session) return <Login onLogin={enter} notice={notice} />;
 
+  const canUseApplications = canScreenApplications(session);
   const nav =
-    hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER") || session.ministryIds.length > 0
+    canUseApplications || hasRole(session, "EVENT_LEADER") || session.ministryIds.length > 0
       ? ([
           ["serve", Home, "Home"],
           ["commitments", ClipboardCheck, "My Commitments"],
@@ -565,7 +579,7 @@ export function App() {
                 ["create-events", Plus, "Create Events", "child"]
               ] as const)
             : []),
-          ...(hasRole(session, "ADMIN") ? ([["applications", UserCheck, "Applications"]] as const) : []),
+          ...(canUseApplications ? ([["applications", UserCheck, "Applications"]] as const) : []),
           ["tools", Wrench, "Tools"],
           ...(hasRole(session, "ADMIN") || session.ministryIds.length > 0
             ? ([["administration", Settings, "Administration"]] as const)
@@ -599,7 +613,12 @@ export function App() {
     setMenuOpen(false);
     setView("events");
   };
-  const notificationCount = pendingMinistryRequests + actionableEvents;
+  const openApplications = () => {
+    setNotificationsOpen(false);
+    setMenuOpen(false);
+    setView("applications");
+  };
+  const notificationCount = pendingMinistryRequests + actionableEvents + pendingApplications;
 
   return (
     <div className="app-shell">
@@ -632,6 +651,9 @@ export function App() {
               <span>{label}</span>
               {id === "messages" && unreadMessages > 0 && <strong className="nav-badge">{unreadMessages}</strong>}
               {id === "tasks" && activeTasks > 0 && <strong className="nav-badge">{activeTasks}</strong>}
+              {id === "applications" && pendingApplications > 0 && (
+                <strong className="nav-badge">{pendingApplications}</strong>
+              )}
             </button>
           ))}
         </nav>
@@ -693,6 +715,17 @@ export function App() {
                         <ChevronRight size={17} />
                       </button>
                     )}
+                    {pendingApplications > 0 && (
+                      <button type="button" className="notification-item" onClick={openApplications}>
+                        <span>
+                          <strong>
+                            {pendingApplications} application{pendingApplications === 1 ? "" : "s"} need screening
+                          </strong>
+                          <small>Review new volunteer registrations and background checks</small>
+                        </span>
+                        <ChevronRight size={17} />
+                      </button>
+                    )}
                   </>
                 ) : (
                   <p className="notification-empty">No items need attention.</p>
@@ -721,7 +754,9 @@ export function App() {
           {view === "create-events" && (
             <CreateEventsPage session={session} notify={setNotice} close={() => setView("events")} />
           )}
-          {view === "applications" && <Applications notify={setNotice} />}
+          {view === "applications" && canUseApplications && (
+            <Applications notify={setNotice} onApplicationsChanged={refreshPendingApplications} />
+          )}
           {view === "reports" && <Reports />}
           {view === "tools" && (
             <Tools
@@ -2665,7 +2700,13 @@ function VolunteerDirectoryMaintenance({
   );
 }
 
-function Applications({ notify }: { notify: (m: string) => void }) {
+function Applications({
+  notify,
+  onApplicationsChanged
+}: {
+  notify: (m: string) => void;
+  onApplicationsChanged?: () => void;
+}) {
   const [items, setItems] = useState<Array<Record<string, string | number>>>([]);
   const load = () => api<Array<Record<string, string | number>>>("/applications").then(setItems);
   useEffect(() => {
@@ -2674,7 +2715,8 @@ function Applications({ notify }: { notify: (m: string) => void }) {
   const decide = async (id: string, status: string) => {
     await api(`/applications/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
     notify(`Application ${status.toLowerCase()}.`);
-    load();
+    await load();
+    onApplicationsChanged?.();
   };
   return (
     <>
