@@ -6505,16 +6505,14 @@ function RoleAssignmentMaintenance({ notify, close }: { notify: (m: string) => v
 function Profile({ notify }: { notify: (m: string) => void }) {
   const [profile, setProfile] = useState<Record<string, unknown>>({});
   const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
-  const [ministries, setMinistries] = useState<Ministry[]>([]);
   const [editing, setEditing] = useState(false);
   const [linkingFamily, setLinkingFamily] = useState(false);
   const load = () => api<Record<string, unknown>>("/me").then(setProfile);
   useEffect(() => {
     void load();
-    api<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>("/catalog")
+    api<{ campuses: CampusCatalogItem[] }>("/catalog")
       .then((catalog) => {
         setCampuses(catalog.campuses);
-        setMinistries(catalog.ministries);
       })
       .catch((error) => notify((error as Error).message));
   }, []);
@@ -6546,8 +6544,7 @@ function Profile({ notify }: { notify: (m: string) => void }) {
         };
     const payloadWithHomeCampuses = {
       ...payload,
-      homeCampusIds: formData.getAll("homeCampusIds").map(String),
-      ministryMembershipIds: formData.getAll("ministryMembershipIds").map(String)
+      homeCampusIds: formData.getAll("homeCampusIds").map(String)
     };
     try {
       await api("/me", {
@@ -6663,9 +6660,8 @@ function Profile({ notify }: { notify: (m: string) => void }) {
               )}
               <Field name="phone" label="Mobile phone" type="tel" defaultValue={String(profile.phone ?? "")} />
               <CampusBubbleSelector campuses={campuses} selectedIds={(profile.home_campus_ids as string[]) ?? []} />
-              <MinistryBubbleSelector
-                ministries={ministries}
-                selectedIds={(profile.ministry_membership_ids as string[]) ?? []}
+              <ReadonlyMinistryBubbles
+                memberships={(profile.ministry_memberships as Array<Pick<Ministry, "id" | "name">>) ?? []}
               />
               {hasVolunteerProfile && (
                 <>
@@ -7080,67 +7076,25 @@ function CampusBubbleSelector({
     </div>
   );
 }
-function MinistryBubbleSelector({
-  ministries,
-  selectedIds,
-  inputName = "ministryMembershipIds",
-  title = "Ministry membership",
-  emptyLabel = "Add ministry",
-  addAnotherLabel = "Add another ministry",
-  helpText = "Select each ministry you serve with or want to stay connected to."
+function ReadonlyMinistryBubbles({
+  memberships,
+  title = "Ministry membership"
 }: {
-  ministries: Ministry[];
-  selectedIds: string[];
-  inputName?: string;
+  memberships: Array<Pick<Ministry, "id" | "name">>;
   title?: string;
-  emptyLabel?: string;
-  addAnotherLabel?: string;
-  helpText?: string;
 }) {
-  const [selected, setSelected] = useState(selectedIds);
-  const [ministryId, setMinistryId] = useState("");
-  const selectedMinistries = selected
-    .map((id) => ministries.find((ministry) => ministry.id === id))
-    .filter(Boolean) as Ministry[];
-  const availableMinistries = ministries.filter((ministry) => ministry.is_active && !selected.includes(ministry.id));
-
   return (
     <div className="campus-bubble-selector">
       <span className="leader-selector-title">{title}</span>
-      {selected.map((id) => (
-        <input key={id} name={inputName} type="hidden" value={id} />
-      ))}
       <div className="campus-bubble-field">
-        {selectedMinistries.map((ministry) => (
-          <button
-            className="campus-bubble"
-            type="button"
-            key={ministry.id}
-            title={`Remove ${ministry.name}`}
-            onClick={() => setSelected((current) => current.filter((id) => id !== ministry.id))}
-          >
+        {memberships.map((ministry) => (
+          <span className="campus-bubble" key={ministry.id}>
             <Users size={14} />
             <span>{ministry.name}</span>
-            <X size={14} />
-          </button>
+          </span>
         ))}
-        <select
-          value={ministryId}
-          onChange={(event) => {
-            const nextMinistryId = event.target.value;
-            if (nextMinistryId) setSelected((current) => [...current, nextMinistryId]);
-            setMinistryId("");
-          }}
-        >
-          <option value="">{selected.length ? addAnotherLabel : emptyLabel}</option>
-          {availableMinistries.map((ministry) => (
-            <option key={ministry.id} value={ministry.id}>
-              {ministry.name}
-            </option>
-          ))}
-        </select>
+        {!memberships.length && <span className="empty-inline">No ministries assigned</span>}
       </div>
-      <small className="form-help">{helpText}</small>
     </div>
   );
 }

@@ -371,8 +371,7 @@ app.patch(
         smsConsent: z.boolean().optional(),
         emailOptIn: z.boolean().optional(),
         pushOptIn: z.boolean().optional(),
-        homeCampusIds: z.array(uuid).optional(),
-        ministryMembershipIds: z.array(uuid).optional()
+        homeCampusIds: z.array(uuid).optional()
       })
       .parse(req.body);
     await transaction(async (client) => {
@@ -398,25 +397,6 @@ app.patch(
           homeCampusIds[0] ?? null,
           req.user!.id
         ]);
-      }
-      if (body.ministryMembershipIds !== undefined) {
-        const ministryMembershipIds = [...new Set(body.ministryMembershipIds)];
-        if (ministryMembershipIds.length) {
-          const ministryResult = await client.query<{ count: number }>(
-            "select count(*)::int count from ministries where id=any($1::uuid[]) and is_active",
-            [ministryMembershipIds]
-          );
-          if (ministryResult.rows[0]?.count !== ministryMembershipIds.length)
-            throw new ApiError("One or more selected ministries are invalid or inactive", 422);
-        }
-        await client.query("delete from user_ministry_memberships where user_id=$1", [req.user!.id]);
-        if (ministryMembershipIds.length) {
-          await client.query(
-            `insert into user_ministry_memberships(user_id, ministry_id)
-             select $1, unnest($2::uuid[])`,
-            [req.user!.id, ministryMembershipIds]
-          );
-        }
       }
       if (req.user!.volunteerId) {
         await client.query(

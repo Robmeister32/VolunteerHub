@@ -2126,6 +2126,11 @@ main {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.empty-inline {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
 .campus-lead-list {
   display: grid;
   gap: 8px;
