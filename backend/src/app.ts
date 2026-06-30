@@ -633,7 +633,19 @@ app.get(
          from campuses where is_active order by name`
       ),
       ministries: await all(
-        `select id, name, description, screener_score, is_active, created_at, updated_at
+        `select m.id, m.name, m.description, m.screener_score, m.is_active, m.created_at, m.updated_at,
+         case when $2::boolean then coalesce((
+           select jsonb_agg(jsonb_build_object(
+             'campus_id', c.id,
+             'campus_name', c.name,
+             'lead_user_id', mcl.lead_user_id,
+             'lead_name', coalesce(lead_user.display_name, lead_user.email)
+           ) order by c.name)
+           from campuses c
+           left join ministry_campus_leads mcl on mcl.ministry_id=m.id and mcl.campus_id=c.id
+           left join app_users lead_user on lead_user.id=mcl.lead_user_id
+           where c.is_active or mcl.lead_user_id is not null
+         ), '[]'::jsonb) else '[]'::jsonb end campus_leads
          from ministries m
          where m.is_active
            and (
@@ -651,7 +663,8 @@ app.get(
         [
           req.user!.volunteerId && req.user!.roles.every((role) => role.toUpperCase() === "VOLUNTEER")
             ? req.user!.volunteerId
-            : null
+            : null,
+          hasRole(req.user!, "ADMIN") || hasRole(req.user!, "EVENT_LEADER")
         ]
       ),
       roles: await all(
@@ -1689,7 +1702,7 @@ async function validateLeaderIds(ids: string[], eligibleRoles: string[], leaderT
 
 const validateEventLeaderIds = (ids: string[]) => validateLeaderIds(ids, ["ADMIN", "EVENT_LEADER"], "event");
 const validateTeamLeaderIds = (ids: string[]) =>
-  validateLeaderIds(ids, ["ADMIN", "EVENT_LEADER", "TEAM_LEADER"], "team");
+  validateLeaderIds(ids, ["ADMIN", "EVENT_LEADER", "TEAM_LEADER", "MINISTRY_HEAD"], "team");
 
 async function validateEventTemplate(body: z.infer<typeof eventTemplateInput>) {
   for (const team of body.teams) {
@@ -1954,10 +1967,16 @@ app.get(
            array_agg(distinct coalesce(uhc.campus_id, u.home_campus_id))
              filter (where coalesce(uhc.campus_id, u.home_campus_id) is not null),
            '{}'
+         ) ||
+         coalesce(
+           array_agg(distinct mcl.campus_id)
+             filter (where mcl.campus_id is not null),
+           '{}'
          ) campus_ids
          from app_users u join app_user_roles aur on aur.user_id=u.id
          left join user_home_campuses uhc on uhc.user_id=u.id
-         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER')
+         left join ministry_campus_leads mcl on mcl.lead_user_id=u.id
+         where u.status='ACTIVE' and aur.role_code in ('ADMIN', 'EVENT_LEADER', 'TEAM_LEADER', 'MINISTRY_HEAD')
          group by u.id
          order by coalesce(display_name, email), email`
       )
@@ -1975,11 +1994,26 @@ app.post(
     const endsAt = new Date(body.endsAt);
     if (endsAt <= startsAt) throw new ApiError("End date must be after start date", 422);
     await validateEventLeaderIds(body.eventLeaderUserIds);
-    for (const team of body.teams) await validateTeamLeaderIds(team.leaderUserIds);
     const participatingCampusIds = [
       ...new Set(body.participatingCampusIds.length ? body.participatingCampusIds : [body.campusId])
     ];
     await validateCampusIds([body.campusId, ...participatingCampusIds]);
+    const ministryLeadRows = await all<{ ministry_name: string; lead_user_id: string }>(
+      `select m.name ministry_name, mcl.lead_user_id
+       from ministries m
+       join ministry_campus_leads mcl on mcl.ministry_id=m.id
+       where mcl.campus_id=$1 and m.is_active`,
+      [body.campusId]
+    );
+    const ministryLeadIds = new Map(ministryLeadRows.map((row) => [row.ministry_name, row.lead_user_id]));
+    const teams = body.teams.map((team) => {
+      const ministryLeadId = team.name === "Open" ? undefined : ministryLeadIds.get(team.name);
+      return {
+        ...team,
+        leaderUserIds: team.leaderUserIds.length || !ministryLeadId ? team.leaderUserIds : [ministryLeadId]
+      };
+    });
+    for (const team of teams) await validateTeamLeaderIds(team.leaderUserIds);
     const eventId = await transaction(async (client) => {
       const event = (
         await client.query<{ id: string }>(
@@ -2002,7 +2036,7 @@ app.post(
           ]
         )
       ).rows[0]!;
-      for (const team of body.teams) {
+      for (const team of teams) {
         await client.query(
           `insert into event_groups(event_id,name,description,instructions,leader_user_ids,required_volunteer_count,
              signup_policy,movement_policy,self_checkin_enabled,is_active)
@@ -2022,7 +2056,7 @@ app.post(
       }
       return event.id;
     });
-    await audit(req.user!.id, "EVENT_CREATED", "event", eventId, body);
+    await audit(req.user!.id, "EVENT_CREATED", "event", eventId, { ...body, teams });
     res.status(201).json({ id: eventId });
   })
 );

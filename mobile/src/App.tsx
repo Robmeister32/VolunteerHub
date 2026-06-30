@@ -3870,9 +3870,45 @@ function OneOffEventCreator({
   const selectedParticipantDefaults =
     locationType === "CAMPUS" && campusId ? [campusId] : session.homeCampusIds.filter(Boolean);
   const selectedParticipantDefaultKey = selectedParticipantDefaults.join("|");
+  const teamLeaderCampusId =
+    locationType === "CAMPUS" ? campusId : participatingCampusIds[0] ?? selectedParticipantDefaults[0] ?? "";
   useEffect(() => {
     setParticipatingCampusIds(selectedParticipantDefaults);
   }, [selectedParticipantDefaultKey]);
+  const ministryLeadConfigKey = catalog.ministries
+    .map(
+      (ministry) =>
+        `${ministry.name}:${(ministry.campus_leads ?? [])
+          .map((lead) => `${lead.campus_id}:${lead.lead_user_id ?? ""}`)
+          .join(",")}`
+    )
+    .join("|");
+  const ministryLeadIdsForTeam = (teamName: string) =>
+    new Set(
+      catalog.ministries
+        .find((ministry) => ministry.name === teamName)
+        ?.campus_leads?.map((lead) => lead.lead_user_id)
+        .filter(Boolean) ?? []
+    );
+  const resolveMinistryCampusLeadId = (teamName: string) =>
+    teamName === "Open"
+      ? ""
+      : catalog.ministries
+          .find((ministry) => ministry.name === teamName)
+          ?.campus_leads?.find((lead) => lead.campus_id === teamLeaderCampusId)?.lead_user_id ?? "";
+  useEffect(() => {
+    setTeams((current) =>
+      current.map((team) => {
+        const ministryLeadId = resolveMinistryCampusLeadId(team.name);
+        const knownMinistryLeadIds = ministryLeadIdsForTeam(team.name);
+        const canUseDefault =
+          team.name !== "Open" &&
+          (!team.leaderUserIds.length || team.leaderUserIds.every((leaderId) => knownMinistryLeadIds.has(leaderId)));
+        if (!canUseDefault || team.leaderUserIds[0] === ministryLeadId) return team;
+        return { ...team, leaderUserIds: ministryLeadId ? [ministryLeadId] : [] };
+      })
+    );
+  }, [teamLeaderCampusId, ministryLeadConfigKey]);
   const teamLeaderOptions = teamLeaders.filter((leader) => {
     if (!participatingCampusIds.length) return true;
     if (!leader.campus_ids?.length) return true;
@@ -4071,7 +4107,14 @@ function OneOffEventCreator({
                   <select
                     name={`teamName-${index}`}
                     value={team.name || "Open"}
-                    onChange={(event) => updateTeam(index, { name: event.target.value })}
+                    onChange={(event) => {
+                      const nextTeamName = event.target.value;
+                      const ministryLeadId = resolveMinistryCampusLeadId(nextTeamName);
+                      updateTeam(index, {
+                        name: nextTeamName,
+                        leaderUserIds: ministryLeadId ? [ministryLeadId] : []
+                      });
+                    }}
                     required
                   >
                     <option value="Open">Open</option>
