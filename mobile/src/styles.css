@@ -1461,8 +1461,10 @@ main {
   opacity: 0.45;
 }
 .secondary {
-  background: #fff;
-  color: var(--ink);
+  /* background: #fff;
+  color: var(--ink); */
+  background: var(--mint);
+  color: var(--cream);
   border: 1px solid var(--line);
 }
 .secondary.danger {
