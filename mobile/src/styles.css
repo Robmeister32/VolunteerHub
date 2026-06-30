@@ -1463,7 +1463,7 @@ main {
 .secondary {
   /* background: #fff;
   color: var(--ink); */
-  background: var(--mint);
+  background: var(--teal);
   color: var(--cream);
   border: 1px solid var(--line);
 }
