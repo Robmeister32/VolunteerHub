@@ -2978,7 +2978,7 @@ form.audit-search {
   gap: 12px;
   margin-bottom: 8px;
   color: var(--ink);
-  font-size: 0.84rem;
+  font-size: 0.78rem;
   font-weight: 700;
 }
 .service-time-heading small {
@@ -2997,8 +2997,9 @@ form.audit-search {
   display: grid;
   grid-template-columns: minmax(110px, 1fr) minmax(95px, 0.8fr) auto;
   align-items: center;
-  min-height: 43px;
+  min-height: 36px;
   border-bottom: 1px solid #edf1ee;
+  font-size: 0.78rem;
 }
 .recurring-schedule-row {
   grid-template-columns: minmax(85px, 1fr) minmax(78px, 0.8fr) minmax(72px, 0.7fr) auto;
@@ -3012,7 +3013,7 @@ form.audit-search {
 .service-time-row > span,
 .service-time-row > label {
   min-width: 0;
-  padding: 8px 10px;
+  padding: 6px 8px;
 }
 .service-time-header {
   min-height: 34px;
@@ -3030,7 +3031,10 @@ form.audit-search {
 .service-time-form-row input {
   width: 100%;
   min-width: 0;
-  padding: 8px 9px;
+  padding: 8px 10px;
+  font-family: "DM Sans", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 .service-time-actions {
   display: flex;
