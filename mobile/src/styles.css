@@ -193,6 +193,9 @@ nav button.sub-nav svg {
   border-radius: 20px;
   font-size: 0.65rem;
 }
+.nav-badge.tight {
+  margin-left: -4px;
+}
 .logout {
   margin-top: auto;
 }
@@ -1556,7 +1559,7 @@ main {
   gap: 20px;
   align-items: center;
   margin: 8px 0 28px;
-  padding: 28px 82px 28px 30px;
+  padding: 28px 30px;
   color: #123f3d;
   background: linear-gradient(135deg, #d9f3df, #c8edda);
   border: 1px solid #8cc7ac;
@@ -1571,15 +1574,6 @@ main {
 .event-management-banner p {
   margin: 0;
   color: #52736b;
-}
-.event-management-actions {
-  position: absolute;
-  top: 16px;
-  right: 18px;
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 8px;
-  margin: 0;
 }
 .event-management-icon-button {
   width: 34px;
@@ -1749,6 +1743,40 @@ main {
   margin-top: 2px;
   color: var(--muted);
   font-size: 0.65rem;
+}
+.team-staffed-gauge {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.team-staffed-gauge span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--teal);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.team-staffed-gauge small {
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.team-staffed-gauge i {
+  display: block;
+  height: 9px;
+  overflow: hidden;
+  background: #e4eee9;
+  border-radius: 999px;
+}
+.team-staffed-gauge b {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #176b63, #7fc4a7);
+  border-radius: inherit;
 }
 .policy.auto {
   background: #e2f0eb;

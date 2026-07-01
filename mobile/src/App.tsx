@@ -663,6 +663,9 @@ export function App() {
               <Icon size={19} />
               <span>{label}</span>
               {id === "messages" && unreadMessages > 0 && <strong className="nav-badge">{unreadMessages}</strong>}
+              {id === "events" && actionableEvents > 0 && (
+                <strong className="nav-badge tight">{actionableEvents}</strong>
+              )}
               {id === "tasks" && activeTasks > 0 && <strong className="nav-badge">{activeTasks}</strong>}
               {id === "applications" && pendingApplications > 0 && (
                 <strong className="nav-badge">{pendingApplications}</strong>
@@ -2341,28 +2344,6 @@ function EventTeamManagement({
           <span className="eyebrow">Event details</span>
           <h2>{event.name}</h2>
           <p>{event.description || "No event description has been added."}</p>
-          {canEdit && (
-            <div className="event-management-actions">
-              <button
-                className="icon-button event-management-icon-button"
-                type="button"
-                aria-label="Edit event"
-                title="Edit event"
-                onClick={() => setEditMode("edit-event")}
-              >
-                <Pencil size={16} />
-              </button>
-              <button
-                className="icon-button event-management-icon-button danger"
-                type="button"
-                aria-label="Delete event"
-                title="Delete event"
-                onClick={deleteEvent}
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-          )}
         </div>
         <div className="event-management-facts">
           <span className="event-date-fact">
@@ -2381,16 +2362,8 @@ function EventTeamManagement({
             <strong>{eventLocation(event)}</strong>
           </span>
           <span>
-            <Users size={18} />
-            <strong>
-              {event.confirmed_count}/{event.required_count} staffed
-            </strong>
-          </span>
-          <span>
             <ClipboardCheck size={18} />
-            <strong>
-              {event.groups.length} team{event.groups.length === 1 ? "" : "s"}
-            </strong>
+            <strong>{eventStatusBadgeLabel(event)}</strong>
           </span>
         </div>
       </section>
@@ -2459,6 +2432,9 @@ function EventTeamAccordionCard({
   const selectedLeaderIds = team?.leader_user_ids ?? [];
   const leaderNames = selectedLeaderIds.map((id) => leaderNameById.get(id)).filter(Boolean);
   const teamName = team?.name ?? "Open";
+  const requiredCount = team?.required_count ?? 0;
+  const confirmedCount = team?.confirmed_count ?? 0;
+  const staffedPercent = Math.min(100, Math.round((confirmedCount / Math.max(1, requiredCount)) * 100));
 
   return (
     <article className={["event-template-team-card", expanded ? "expanded" : "collapsed"].join(" ")}>
@@ -2498,11 +2474,11 @@ function EventTeamAccordionCard({
       </div>
       <div className="team-card-metrics">
         <span>
-          <strong>{team?.required_count ?? 0}</strong>
+          <strong>{requiredCount}</strong>
           <small>Target</small>
         </span>
         <span>
-          <strong>{team?.confirmed_count ?? 0}</strong>
+          <strong>{confirmedCount}</strong>
           <small>Staffed</small>
         </span>
         <span>
@@ -2513,6 +2489,15 @@ function EventTeamAccordionCard({
           <strong>{team?.pending_count ?? 0}</strong>
           <small>Pending</small>
         </span>
+      </div>
+      <div className="team-staffed-gauge" aria-label={`${confirmedCount} of ${requiredCount} positions staffed`}>
+        <span>
+          <strong>{staffedPercent}%</strong>
+          <small>staffed</small>
+        </span>
+        <i aria-hidden="true">
+          <b style={{ width: `${staffedPercent}%` }} />
+        </i>
       </div>
       <span className={`policy ${team?.signup_policy === "APPROVAL" ? "approval" : "auto"}`}>
         {team?.signup_policy === "APPROVAL" ? "Approval" : "Automatic"}
