@@ -2946,17 +2946,11 @@ form.audit-search {
 .campus-actions .secondary {
   padding: 7px 9px;
 }
-.service-time-card-actions {
+.service-time-form-section {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
 }
-.service-time-card-actions select {
-  min-width: 150px;
-  max-width: 210px;
-  padding: 8px 30px 8px 10px;
-}
-.card-header .service-time-action,
 .service-time-action {
   width: 32px;
   height: 32px;
@@ -3701,14 +3695,6 @@ form.audit-search {
   .campus-actions {
     width: auto;
     padding-left: 0;
-  }
-  .service-time-card-actions {
-    width: 100%;
-    justify-content: flex-end;
-  }
-  .service-time-card-actions select {
-    min-width: 0;
-    flex: 1;
   }
   .service-time-row {
     grid-template-columns: minmax(90px, 1fr) minmax(85px, 0.9fr) auto;

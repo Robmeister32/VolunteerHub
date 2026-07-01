@@ -6003,28 +6003,29 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
   const [campuses, setCampuses] = useState<Campus[]>([]);
   const [editing, setEditing] = useState<Campus | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [selectedCampusId, setSelectedCampusId] = useState("");
   const [serviceTimes, setServiceTimes] = useState<CampusServiceTime[]>([]);
+  const [originalServiceTimes, setOriginalServiceTimes] = useState<CampusServiceTime[]>([]);
   const [editingServiceTime, setEditingServiceTime] = useState<CampusServiceTime | null>(null);
   const [serviceTimeFormOpen, setServiceTimeFormOpen] = useState(false);
   const [serviceTimeForm, setServiceTimeForm] = useState({ serviceDay: "Sunday", serviceTime: "09:45" });
 
   const load = () =>
     api<Campus[]>("/administration/campuses")
-      .then((rows) => {
-        setCampuses(rows);
-        setSelectedCampusId((current) => current || rows[0]?.id || "");
-      })
+      .then(setCampuses)
       .catch((error) => notify((error as Error).message));
 
   const loadServiceTimes = useCallback(
     (campusId: string) => {
       if (!campusId) {
         setServiceTimes([]);
+        setOriginalServiceTimes([]);
         return;
       }
       api<CampusServiceTime[]>(`/administration/campuses/${campusId}/service-times`)
-        .then(setServiceTimes)
+        .then((rows) => {
+          setServiceTimes(rows);
+          setOriginalServiceTimes(rows);
+        })
         .catch((error) => notify((error as Error).message));
     },
     [notify]
@@ -6033,9 +6034,6 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
   useEffect(() => {
     void load();
   }, []);
-  useEffect(() => {
-    loadServiceTimes(selectedCampusId);
-  }, [selectedCampusId, loadServiceTimes]);
 
   const payloadFor = (campus: Campus) => ({
     name: campus.name,
@@ -6050,6 +6048,40 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
     timezone: campus.timezone,
     isActive: campus.is_active
   });
+  const isLocalServiceTime = (serviceTime: CampusServiceTime) => serviceTime.id.startsWith("new-");
+  const serviceTimePayload = (serviceTime: CampusServiceTime) => ({
+    serviceDay: serviceTime.service_day,
+    serviceTime: toServiceTimeInput(serviceTime.service_time)
+  });
+  const syncServiceTimes = async (campusId: string) => {
+    const currentExistingIds = new Set(serviceTimes.filter((serviceTime) => !isLocalServiceTime(serviceTime)).map((serviceTime) => serviceTime.id));
+    const deletedServiceTimes = originalServiceTimes.filter((serviceTime) => !currentExistingIds.has(serviceTime.id));
+
+    for (const serviceTime of deletedServiceTimes) {
+      await api(`/administration/campuses/${campusId}/service-times/${serviceTime.id}`, { method: "DELETE" });
+    }
+    for (const serviceTime of serviceTimes) {
+      const body = serviceTimePayload(serviceTime);
+      if (isLocalServiceTime(serviceTime)) {
+        await api(`/administration/campuses/${campusId}/service-times`, {
+          method: "POST",
+          body: JSON.stringify(body)
+        });
+        continue;
+      }
+      const original = originalServiceTimes.find((item) => item.id === serviceTime.id);
+      if (
+        original &&
+        original.service_day === serviceTime.service_day &&
+        toServiceTimeInput(original.service_time) === toServiceTimeInput(serviceTime.service_time)
+      )
+        continue;
+      await api(`/administration/campuses/${campusId}/service-times/${serviceTime.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+    }
+  };
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -6070,13 +6102,19 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
       isActive: data.isActive === "on"
     };
     try {
-      await api(editing ? `/administration/campuses/${editing.id}` : "/administration/campuses", {
+      const savedCampus = await api<{ id?: string }>(editing ? `/administration/campuses/${editing.id}` : "/administration/campuses", {
         method: editing ? "PATCH" : "POST",
         body: JSON.stringify(body)
       });
+      const campusId = editing?.id ?? savedCampus.id;
+      if (!campusId) throw new Error("Campus saved, but no campus id was returned.");
+      await syncServiceTimes(campusId);
       notify(editing ? "Campus updated." : "Campus created.");
       setEditing(null);
       setFormOpen(false);
+      setServiceTimes([]);
+      setOriginalServiceTimes([]);
+      closeServiceTimeForm();
       form.reset();
       void load();
     } catch (error) {
@@ -6099,12 +6137,22 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
 
   const openForm = (campus?: Campus) => {
     setEditing(campus ?? null);
+    if (campus) {
+      loadServiceTimes(campus.id);
+    } else {
+      setServiceTimes([]);
+      setOriginalServiceTimes([]);
+    }
+    closeServiceTimeForm();
     setFormOpen(true);
   };
 
   const closeForm = () => {
     setEditing(null);
     setFormOpen(false);
+    setServiceTimes([]);
+    setOriginalServiceTimes([]);
+    closeServiceTimeForm();
   };
   const openServiceTimeForm = (serviceTime?: CampusServiceTime) => {
     setEditingServiceTime(serviceTime ?? null);
@@ -6119,25 +6167,30 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
     setServiceTimeFormOpen(false);
     setServiceTimeForm({ serviceDay: "Sunday", serviceTime: "09:45" });
   };
-  const saveServiceTime = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!selectedCampusId) return notify("Select a campus before adding service times.");
-    try {
-      await api(
-        editingServiceTime
-          ? `/administration/campuses/${selectedCampusId}/service-times/${editingServiceTime.id}`
-          : `/administration/campuses/${selectedCampusId}/service-times`,
-        {
-          method: editingServiceTime ? "PATCH" : "POST",
-          body: JSON.stringify(serviceTimeForm)
-        }
-      );
-      notify(editingServiceTime ? "Service time updated." : "Service time added.");
-      closeServiceTimeForm();
-      loadServiceTimes(selectedCampusId);
-    } catch (error) {
-      notify((error as Error).message);
+  const saveServiceTime = () => {
+    const next = {
+      id: editingServiceTime?.id ?? `new-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      campus_id: editing?.id ?? "",
+      campus_name: editing?.name ?? "",
+      service_day: serviceTimeForm.serviceDay,
+      service_time: serviceTimeForm.serviceTime,
+      created_at: editingServiceTime?.created_at ?? "",
+      updated_at: editingServiceTime?.updated_at ?? ""
+    };
+    const duplicate = serviceTimes.some(
+      (serviceTime) =>
+        serviceTime.id !== next.id &&
+        serviceTime.service_day === next.service_day &&
+        toServiceTimeInput(serviceTime.service_time) === toServiceTimeInput(next.service_time)
+    );
+    if (duplicate) {
+      notify("This service time already exists for the campus.");
+      return;
     }
+    setServiceTimes((current) =>
+      editingServiceTime ? current.map((serviceTime) => (serviceTime.id === next.id ? next : serviceTime)) : [...current, next]
+    );
+    closeServiceTimeForm();
   };
   const deleteServiceTime = async (serviceTime: CampusServiceTime) => {
     if (
@@ -6146,16 +6199,9 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
       )
     )
       return;
-    try {
-      await api(`/administration/campuses/${selectedCampusId}/service-times/${serviceTime.id}`, { method: "DELETE" });
-      notify("Service time deleted.");
-      if (editingServiceTime?.id === serviceTime.id) closeServiceTimeForm();
-      loadServiceTimes(selectedCampusId);
-    } catch (error) {
-      notify((error as Error).message);
-    }
+    setServiceTimes((current) => current.filter((item) => item.id !== serviceTime.id));
+    if (editingServiceTime?.id === serviceTime.id) closeServiceTimeForm();
   };
-  const selectedCampus = campuses.find((campus) => campus.id === selectedCampusId);
 
   if (formOpen) {
     return (
@@ -6203,6 +6249,107 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
               <input name="isActive" type="checkbox" defaultChecked={editing?.is_active ?? true} />
               Campus is active
             </label>
+            <div className="service-time-form-section">
+              <div className="service-time-heading">
+                <span>Service times</span>
+                <button
+                  className="icon-button service-time-action"
+                  type="button"
+                  title="Add service time"
+                  aria-label="Add service time"
+                  onClick={() => openServiceTimeForm()}
+                >
+                  <Plus size={17} />
+                </button>
+              </div>
+              <div className="service-time-table" role="table" aria-label="Service times">
+                <div className="service-time-row service-time-header" role="row">
+                  <span role="columnheader">Day</span>
+                  <span role="columnheader">Time</span>
+                  <span role="columnheader" aria-label="Actions" />
+                </div>
+                {serviceTimeFormOpen && (
+                  <div className="service-time-row service-time-form-row" role="row">
+                    <label>
+                      <span className="sr-only">Service day</span>
+                      <select
+                        value={serviceTimeForm.serviceDay}
+                        onChange={(changeEvent) =>
+                          setServiceTimeForm((current) => ({ ...current, serviceDay: changeEvent.target.value }))
+                        }
+                      >
+                        {serviceDays.map((day) => (
+                          <option key={day} value={day}>
+                            {day}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span className="sr-only">Service time</span>
+                      <input
+                        type="time"
+                        step={900}
+                        value={serviceTimeForm.serviceTime}
+                        onChange={(changeEvent) =>
+                          setServiceTimeForm((current) => ({ ...current, serviceTime: changeEvent.target.value }))
+                        }
+                        required
+                      />
+                    </label>
+                    <span className="service-time-actions">
+                      <button
+                        className="icon-button service-time-action"
+                        type="button"
+                        title="Save service time"
+                        aria-label="Save service time"
+                        onClick={saveServiceTime}
+                      >
+                        <Check size={16} />
+                      </button>
+                      <button
+                        className="icon-button service-time-action"
+                        type="button"
+                        title="Cancel"
+                        aria-label="Cancel"
+                        onClick={closeServiceTimeForm}
+                      >
+                        <X size={16} />
+                      </button>
+                    </span>
+                  </div>
+                )}
+                {serviceTimes.map((serviceTime) => (
+                  <div className="service-time-row" role="row" key={serviceTime.id}>
+                    <span role="cell">{serviceTime.service_day}</span>
+                    <span role="cell">{formatServiceTime(serviceTime.service_time)}</span>
+                    <span className="service-time-actions" role="cell">
+                      <button
+                        className="icon-button service-time-action"
+                        type="button"
+                        title="Edit service time"
+                        aria-label={`Edit ${serviceTime.service_day} ${formatServiceTime(serviceTime.service_time)}`}
+                        onClick={() => openServiceTimeForm(serviceTime)}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        className="icon-button service-time-action danger"
+                        type="button"
+                        title="Delete service time"
+                        aria-label={`Delete ${serviceTime.service_day} ${formatServiceTime(serviceTime.service_time)}`}
+                        onClick={() => void deleteServiceTime(serviceTime)}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </span>
+                  </div>
+                ))}
+                {!serviceTimes.length && !serviceTimeFormOpen && (
+                  <div className="service-time-empty">No service times are configured for this campus.</div>
+                )}
+              </div>
+            </div>
             <div className="card-actions">
               <button className="primary">{editing ? "Save changes" : "Create campus"}</button>
               <button className="secondary" type="button" onClick={closeForm}>
@@ -6259,121 +6406,6 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
             </div>
           ))}
           {!campuses.length && <Empty text="No campuses have been configured." />}
-        </div>
-      </Card>
-      <Card
-        title="Service Times"
-        action={
-          <div className="service-time-card-actions">
-            <select
-              value={selectedCampusId}
-              aria-label="Campus"
-              onChange={(event) => {
-                setSelectedCampusId(event.target.value);
-                closeServiceTimeForm();
-              }}
-            >
-              {campuses.map((campus) => (
-                <option key={campus.id} value={campus.id}>
-                  {campus.name}
-                </option>
-              ))}
-            </select>
-            <button
-              className="icon-button service-time-action"
-              type="button"
-              title="Add service time"
-              aria-label="Add service time"
-              disabled={!selectedCampusId}
-              onClick={() => openServiceTimeForm()}
-            >
-              <Plus size={17} />
-            </button>
-          </div>
-        }
-      >
-        <div className="service-time-heading">
-          <span>{selectedCampus ? `${selectedCampus.name} service schedule` : "Select a campus"}</span>
-          <small>{serviceTimes.length} time{serviceTimes.length === 1 ? "" : "s"}</small>
-        </div>
-        <div className="service-time-table" role="table" aria-label="Service times">
-          <div className="service-time-row service-time-header" role="row">
-            <span role="columnheader">Day</span>
-            <span role="columnheader">Time</span>
-            <span role="columnheader" aria-label="Actions" />
-          </div>
-          {serviceTimeFormOpen && (
-            <form className="service-time-row service-time-form-row" role="row" onSubmit={saveServiceTime}>
-              <label>
-                <span className="sr-only">Service day</span>
-                <select
-                  value={serviceTimeForm.serviceDay}
-                  onChange={(event) => setServiceTimeForm((current) => ({ ...current, serviceDay: event.target.value }))}
-                >
-                  {serviceDays.map((day) => (
-                    <option key={day} value={day}>
-                      {day}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="sr-only">Service time</span>
-                <input
-                  type="time"
-                  step={900}
-                  value={serviceTimeForm.serviceTime}
-                  onChange={(event) =>
-                    setServiceTimeForm((current) => ({ ...current, serviceTime: event.target.value }))
-                  }
-                  required
-                />
-              </label>
-              <span className="service-time-actions">
-                <button className="icon-button service-time-action" type="submit" title="Save" aria-label="Save">
-                  <Check size={16} />
-                </button>
-                <button
-                  className="icon-button service-time-action"
-                  type="button"
-                  title="Cancel"
-                  aria-label="Cancel"
-                  onClick={closeServiceTimeForm}
-                >
-                  <X size={16} />
-                </button>
-              </span>
-            </form>
-          )}
-          {serviceTimes.map((serviceTime) => (
-            <div className="service-time-row" role="row" key={serviceTime.id}>
-              <span role="cell">{serviceTime.service_day}</span>
-              <span role="cell">{formatServiceTime(serviceTime.service_time)}</span>
-              <span className="service-time-actions" role="cell">
-                <button
-                  className="icon-button service-time-action"
-                  type="button"
-                  title="Edit service time"
-                  aria-label={`Edit ${serviceTime.service_day} ${formatServiceTime(serviceTime.service_time)}`}
-                  onClick={() => openServiceTimeForm(serviceTime)}
-                >
-                  <Pencil size={15} />
-                </button>
-                <button
-                  className="icon-button service-time-action danger"
-                  type="button"
-                  title="Delete service time"
-                  aria-label={`Delete ${serviceTime.service_day} ${formatServiceTime(serviceTime.service_time)}`}
-                  onClick={() => void deleteServiceTime(serviceTime)}
-                >
-                  <Trash2 size={15} />
-                </button>
-              </span>
-            </div>
-          ))}
-          {!serviceTimes.length && !serviceTimeFormOpen && (
-            <div className="service-time-empty">No service times are configured for this campus.</div>
-          )}
         </div>
       </Card>
     </>
