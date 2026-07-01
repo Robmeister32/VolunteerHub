@@ -81,6 +81,7 @@ type ToolsSection =
   | "email-templates"
   | "event-templates"
   | "broadcasts"
+  | "ministry-maintenance"
   | "ministry-registration"
   | "manage-ministry-membership";
 
@@ -193,6 +194,16 @@ interface Campus {
   longitude?: number;
   timezone: string;
   is_active: boolean;
+}
+
+interface CampusServiceTime {
+  id: string;
+  campus_id: string;
+  campus_name: string;
+  service_day: string;
+  service_time: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface Ministry {
@@ -383,6 +394,7 @@ const eventStatuses: Array<{ value: EventStatus; label: string }> = [
   { value: "CANCELLED", label: "Cancelled" },
   { value: "REMOVED", label: "Removed" }
 ];
+const serviceDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 const demoAccounts = [
   { role: "ADMIN", email: "admin@volunteerhub.local", description: "Operations, compliance, and reporting" },
   { role: "EVENT_LEADER", email: "leader@volunteerhub.local", description: "Rosters, approvals, and attendance" },
@@ -424,6 +436,10 @@ function canManageMinistryMembershipTools(session: Session) {
     hasRole(session, "TEAM_LEADER") ||
     session.ministryIds.length > 0
   );
+}
+
+function canManageMinistryMaintenance(session: Session) {
+  return hasRole(session, "ADMIN") || hasRole(session, "MINISTRY_HEAD");
 }
 
 function eventHasPassed(event: Pick<EventItem, "ends_at">) {
@@ -580,7 +596,7 @@ export function App() {
 
   const canUseApplications = canScreenApplications(session);
   const nav =
-    canUseApplications || hasRole(session, "EVENT_LEADER") || session.ministryIds.length > 0
+    canUseApplications || hasRole(session, "EVENT_LEADER") || hasRole(session, "MINISTRY_HEAD")
       ? ([
           ["serve", Home, "Home"],
           ["commitments", ClipboardCheck, "My Commitments"],
@@ -594,9 +610,7 @@ export function App() {
             : []),
           ...(canUseApplications ? ([["applications", UserCheck, "Applications"]] as const) : []),
           ["tools", Wrench, "Tools"],
-          ...(hasRole(session, "ADMIN") || session.ministryIds.length > 0
-            ? ([["administration", Settings, "Administration"]] as const)
-            : []),
+          ...(hasRole(session, "ADMIN") ? ([["administration", Settings, "Administration"]] as const) : []),
           ["profile", Users, "Profile"]
         ] as const)
       : ([
@@ -783,7 +797,7 @@ export function App() {
               onMembershipRequestsChanged={refreshMinistryMembershipNotifications}
             />
           )}
-          {view === "administration" && (hasRole(session, "ADMIN") || session.ministryIds.length > 0) && (
+          {view === "administration" && hasRole(session, "ADMIN") && (
             <Administration key={administrationKey} session={session} navigate={setView} notify={setNotice} />
           )}
           {view === "profile" && <Profile notify={setNotice} />}
@@ -3439,12 +3453,14 @@ function Tools({
   const [toolCounts, setToolCounts] = useState({
     volunteers: 0,
     tasks: 0,
-    archivedEvents: 0
+    archivedEvents: 0,
+    ministries: 0
   });
   const canUseTemplates = canManageEmailTemplates(session);
   const canUseBroadcasts = canCreateBroadcasts(session);
   const canUseOperations = canUseNonVolunteerTools(session);
   const canUseArchivedEvents = canUseArchivedEventTools(session);
+  const canUseMinistryMaintenance = canManageMinistryMaintenance(session);
   const canRegisterForMinistry = Boolean(session.volunteerId);
   const canManageMinistryMembership = canManageMinistryMembershipTools(session);
 
@@ -3473,23 +3489,25 @@ function Tools({
         })
         .catch(() => undefined);
     }
-    if (canUseOperations || canUseArchivedEvents) {
+    if (canUseOperations || canUseArchivedEvents || canUseMinistryMaintenance) {
       Promise.allSettled([
         canUseOperations ? api<VolunteerDirectoryPerson[]>("/administration/volunteers") : Promise.resolve([]),
         canUseOperations ? api<AdminTaskItem[]>("/administration/tasks") : Promise.resolve([]),
-        canUseArchivedEvents ? api<ArchivedEvent[]>("/administration/archived-events") : Promise.resolve([])
+        canUseArchivedEvents ? api<ArchivedEvent[]>("/administration/archived-events") : Promise.resolve([]),
+        canUseMinistryMaintenance ? api<Ministry[]>("/administration/ministries") : Promise.resolve([])
       ]).then((results) => {
-        const [volunteers, tasks, archivedEvents] = results.map((result) =>
+        const [volunteers, tasks, archivedEvents, ministries] = results.map((result) =>
           result.status === "fulfilled" ? result.value : []
         );
         setToolCounts({
           volunteers: volunteers.length,
           tasks: tasks.length,
-          archivedEvents: archivedEvents.length
+          archivedEvents: archivedEvents.length,
+          ministries: ministries.length
         });
       });
     }
-  }, [section, canUseTemplates, canUseBroadcasts, canUseOperations, canUseArchivedEvents]);
+  }, [section, canUseTemplates, canUseBroadcasts, canUseOperations, canUseArchivedEvents, canUseMinistryMaintenance]);
 
   if (section === "volunteers" && canUseOperations) {
     return <VolunteerDirectoryMaintenance notify={notify} close={() => setSection("home")} parentLabel="Tools" />;
@@ -3499,6 +3517,11 @@ function Tools({
   }
   if (section === "archived-events" && canUseArchivedEvents) {
     return <ArchivedEventMaintenance notify={notify} close={() => setSection("home")} parentLabel="Tools" />;
+  }
+  if (section === "ministry-maintenance" && canUseMinistryMaintenance) {
+    return (
+      <MinistryMaintenance session={session} notify={notify} close={() => setSection("home")} parentLabel="Tools" />
+    );
   }
   if (section === "email-templates" && canUseTemplates) {
     return <EmailTemplateManager notify={notify} close={() => setSection("home")} />;
@@ -3545,6 +3568,15 @@ function Tools({
             description="Approve ministry requests and review members by campus."
             count={pendingMinistryRequests}
             onClick={() => setSection("manage-ministry-membership")}
+          />
+        )}
+        {canUseMinistryMaintenance && (
+          <MaintenanceCard
+            icon={<Building2 />}
+            title="Ministry"
+            description="Maintain ministries, ministry heads, and campus lead assignments."
+            count={toolCounts.ministries}
+            onClick={() => setSection("ministry-maintenance")}
           />
         )}
       </div>
@@ -3620,6 +3652,7 @@ function Tools({
       )}
       {!canRegisterForMinistry &&
         !canManageMinistryMembership &&
+        !canUseMinistryMaintenance &&
         !canUseTemplates &&
         !canUseBroadcasts &&
         !canUseOperations &&
@@ -5447,12 +5480,9 @@ function Administration({
   navigate: (view: View) => void;
   notify: (m: string) => void;
 }) {
-  const [section, setSection] = useState<
-    "home" | "campuses" | "ministries" | "system-roles" | "role-assignments" | "audit"
-  >("home");
+  const [section, setSection] = useState<"home" | "campuses" | "system-roles" | "role-assignments" | "audit">("home");
   const [counts, setCounts] = useState({
     campuses: 0,
-    ministries: 0,
     systemRoles: 0,
     assignments: 0,
     audit: 0
@@ -5462,17 +5492,15 @@ function Administration({
     if (!hasRole(session, "ADMIN")) return;
     Promise.allSettled([
       api<Campus[]>("/administration/campuses"),
-      api<Ministry[]>("/administration/ministries"),
       api<SystemRole[]>("/administration/system-roles"),
       api<UserRoleAssignment[]>("/administration/role-assignments"),
       api<AuditLogItem[]>("/administration/audit-logs")
     ]).then((results) => {
-      const [campuses, ministries, systemRoles, assignments, audit] = results.map((result) =>
+      const [campuses, systemRoles, assignments, audit] = results.map((result) =>
         result.status === "fulfilled" ? result.value : []
       );
       setCounts({
         campuses: campuses.length,
-        ministries: ministries.length,
         systemRoles: systemRoles.length,
         assignments: assignments.length,
         audit: audit.length
@@ -5482,12 +5510,7 @@ function Administration({
     });
   }, []);
 
-  if (!hasRole(session, "ADMIN"))
-    return <MinistryMaintenance session={session} notify={notify} close={() => navigate("serve")} />;
-
   if (section === "campuses") return <CampusMaintenance notify={notify} close={() => setSection("home")} />;
-  if (section === "ministries")
-    return <MinistryMaintenance session={session} notify={notify} close={() => setSection("home")} />;
   if (section === "system-roles") return <SystemRoleMaintenance notify={notify} close={() => setSection("home")} />;
   if (section === "role-assignments")
     return <RoleAssignmentMaintenance notify={notify} close={() => setSection("home")} />;
@@ -5513,13 +5536,6 @@ function Administration({
           description="Maintain church locations, addresses, map coordinates, and active status."
           count={counts.campuses}
           onClick={() => setSection("campuses")}
-        />
-        <MaintenanceCard
-          icon={<Users />}
-          title="Ministry"
-          description="Maintain ministries, ministry heads, and campus lead assignments."
-          count={counts.ministries}
-          onClick={() => setSection("ministries")}
         />
         <MaintenanceCard
           icon={<Settings />}
@@ -5987,15 +6003,39 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
   const [campuses, setCampuses] = useState<Campus[]>([]);
   const [editing, setEditing] = useState<Campus | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [selectedCampusId, setSelectedCampusId] = useState("");
+  const [serviceTimes, setServiceTimes] = useState<CampusServiceTime[]>([]);
+  const [editingServiceTime, setEditingServiceTime] = useState<CampusServiceTime | null>(null);
+  const [serviceTimeFormOpen, setServiceTimeFormOpen] = useState(false);
+  const [serviceTimeForm, setServiceTimeForm] = useState({ serviceDay: "Sunday", serviceTime: "09:45" });
 
   const load = () =>
     api<Campus[]>("/administration/campuses")
-      .then(setCampuses)
+      .then((rows) => {
+        setCampuses(rows);
+        setSelectedCampusId((current) => current || rows[0]?.id || "");
+      })
       .catch((error) => notify((error as Error).message));
+
+  const loadServiceTimes = useCallback(
+    (campusId: string) => {
+      if (!campusId) {
+        setServiceTimes([]);
+        return;
+      }
+      api<CampusServiceTime[]>(`/administration/campuses/${campusId}/service-times`)
+        .then(setServiceTimes)
+        .catch((error) => notify((error as Error).message));
+    },
+    [notify]
+  );
 
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    loadServiceTimes(selectedCampusId);
+  }, [selectedCampusId, loadServiceTimes]);
 
   const payloadFor = (campus: Campus) => ({
     name: campus.name,
@@ -6066,6 +6106,56 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
     setEditing(null);
     setFormOpen(false);
   };
+  const openServiceTimeForm = (serviceTime?: CampusServiceTime) => {
+    setEditingServiceTime(serviceTime ?? null);
+    setServiceTimeForm({
+      serviceDay: serviceTime?.service_day ?? "Sunday",
+      serviceTime: toServiceTimeInput(serviceTime?.service_time ?? "09:45")
+    });
+    setServiceTimeFormOpen(true);
+  };
+  const closeServiceTimeForm = () => {
+    setEditingServiceTime(null);
+    setServiceTimeFormOpen(false);
+    setServiceTimeForm({ serviceDay: "Sunday", serviceTime: "09:45" });
+  };
+  const saveServiceTime = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedCampusId) return notify("Select a campus before adding service times.");
+    try {
+      await api(
+        editingServiceTime
+          ? `/administration/campuses/${selectedCampusId}/service-times/${editingServiceTime.id}`
+          : `/administration/campuses/${selectedCampusId}/service-times`,
+        {
+          method: editingServiceTime ? "PATCH" : "POST",
+          body: JSON.stringify(serviceTimeForm)
+        }
+      );
+      notify(editingServiceTime ? "Service time updated." : "Service time added.");
+      closeServiceTimeForm();
+      loadServiceTimes(selectedCampusId);
+    } catch (error) {
+      notify((error as Error).message);
+    }
+  };
+  const deleteServiceTime = async (serviceTime: CampusServiceTime) => {
+    if (
+      !window.confirm(
+        `Deleting service time ${serviceTime.service_day} ${formatServiceTime(serviceTime.service_time)}. Are you sure?`
+      )
+    )
+      return;
+    try {
+      await api(`/administration/campuses/${selectedCampusId}/service-times/${serviceTime.id}`, { method: "DELETE" });
+      notify("Service time deleted.");
+      if (editingServiceTime?.id === serviceTime.id) closeServiceTimeForm();
+      loadServiceTimes(selectedCampusId);
+    } catch (error) {
+      notify((error as Error).message);
+    }
+  };
+  const selectedCampus = campuses.find((campus) => campus.id === selectedCampusId);
 
   if (formOpen) {
     return (
@@ -6171,6 +6261,121 @@ function CampusMaintenance({ notify, close }: { notify: (m: string) => void; clo
           {!campuses.length && <Empty text="No campuses have been configured." />}
         </div>
       </Card>
+      <Card
+        title="Service Times"
+        action={
+          <div className="service-time-card-actions">
+            <select
+              value={selectedCampusId}
+              aria-label="Campus"
+              onChange={(event) => {
+                setSelectedCampusId(event.target.value);
+                closeServiceTimeForm();
+              }}
+            >
+              {campuses.map((campus) => (
+                <option key={campus.id} value={campus.id}>
+                  {campus.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="icon-button service-time-action"
+              type="button"
+              title="Add service time"
+              aria-label="Add service time"
+              disabled={!selectedCampusId}
+              onClick={() => openServiceTimeForm()}
+            >
+              <Plus size={17} />
+            </button>
+          </div>
+        }
+      >
+        <div className="service-time-heading">
+          <span>{selectedCampus ? `${selectedCampus.name} service schedule` : "Select a campus"}</span>
+          <small>{serviceTimes.length} time{serviceTimes.length === 1 ? "" : "s"}</small>
+        </div>
+        <div className="service-time-table" role="table" aria-label="Service times">
+          <div className="service-time-row service-time-header" role="row">
+            <span role="columnheader">Day</span>
+            <span role="columnheader">Time</span>
+            <span role="columnheader" aria-label="Actions" />
+          </div>
+          {serviceTimeFormOpen && (
+            <form className="service-time-row service-time-form-row" role="row" onSubmit={saveServiceTime}>
+              <label>
+                <span className="sr-only">Service day</span>
+                <select
+                  value={serviceTimeForm.serviceDay}
+                  onChange={(event) => setServiceTimeForm((current) => ({ ...current, serviceDay: event.target.value }))}
+                >
+                  {serviceDays.map((day) => (
+                    <option key={day} value={day}>
+                      {day}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Service time</span>
+                <input
+                  type="time"
+                  step={900}
+                  value={serviceTimeForm.serviceTime}
+                  onChange={(event) =>
+                    setServiceTimeForm((current) => ({ ...current, serviceTime: event.target.value }))
+                  }
+                  required
+                />
+              </label>
+              <span className="service-time-actions">
+                <button className="icon-button service-time-action" type="submit" title="Save" aria-label="Save">
+                  <Check size={16} />
+                </button>
+                <button
+                  className="icon-button service-time-action"
+                  type="button"
+                  title="Cancel"
+                  aria-label="Cancel"
+                  onClick={closeServiceTimeForm}
+                >
+                  <X size={16} />
+                </button>
+              </span>
+            </form>
+          )}
+          {serviceTimes.map((serviceTime) => (
+            <div className="service-time-row" role="row" key={serviceTime.id}>
+              <span role="cell">{serviceTime.service_day}</span>
+              <span role="cell">{formatServiceTime(serviceTime.service_time)}</span>
+              <span className="service-time-actions" role="cell">
+                <button
+                  className="icon-button service-time-action"
+                  type="button"
+                  title="Edit service time"
+                  aria-label={`Edit ${serviceTime.service_day} ${formatServiceTime(serviceTime.service_time)}`}
+                  onClick={() => openServiceTimeForm(serviceTime)}
+                >
+                  <Pencil size={15} />
+                </button>
+                <button
+                  className="icon-button service-time-action danger"
+                  type="button"
+                  title="Delete service time"
+                  aria-label={`Delete ${serviceTime.service_day} ${formatServiceTime(serviceTime.service_time)}`}
+                  onClick={() => void deleteServiceTime(serviceTime)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </span>
+            </div>
+          ))}
+          {!serviceTimes.length && !serviceTimeFormOpen && (
+            <div className="service-time-empty">No service times are configured for this campus.</div>
+          )}
+        </div>
+      </Card>
     </>
   );
 }
@@ -6266,11 +6471,13 @@ function AuditLogMaintenance({ notify, close }: { notify: (m: string) => void; c
 function MinistryMaintenance({
   session,
   notify,
-  close
+  close,
+  parentLabel = "Administration"
 }: {
   session: Session;
   notify: (m: string) => void;
   close: () => void;
+  parentLabel?: string;
 }) {
   const [ministries, setMinistries] = useState<Ministry[]>([]);
   const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
@@ -6279,6 +6486,7 @@ function MinistryMaintenance({
   const [editing, setEditing] = useState<Ministry | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const canCreate = hasRole(session, "ADMIN");
+  const canAssignMinistryHead = hasRole(session, "ADMIN");
 
   const load = () =>
     Promise.all([
@@ -6383,17 +6591,18 @@ function MinistryMaintenance({
       setEditing(null);
       setFormOpen(false);
     };
+    const editingHeadName = editing?.ministry_head_name || session.name;
     return (
       <>
         <Breadcrumbs
           items={[
-            { label: "Administration", onClick: close },
+            { label: parentLabel, onClick: close },
             { label: "Ministry", onClick: closeForm },
             { label: editing ? "Edit Ministry" : "Add Ministry" }
           ]}
         />
         <PageTitle
-          eyebrow="Administration"
+          eyebrow={parentLabel}
           title={editing ? "Edit ministry" : "Add ministry"}
           description={editing ? "Update this ministry's details and leaders." : "Create a ministry."}
         />
@@ -6424,17 +6633,25 @@ function MinistryMaintenance({
                 IMPORTANT NOTE: Please ask your admin the appropriate screener score for this Ministry.
               </small>
             </label>
-            <label>
-              Ministry Head
-              <select name="ministryHeadUserId" defaultValue={editing?.ministry_head_user_id ?? ""}>
-                <option value="">Unassigned</option>
-                {ministryHeads.map((leader) => (
-                  <option key={leader.id} value={leader.id}>
-                    {leaderLabel(leader)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {canAssignMinistryHead ? (
+              <label>
+                Ministry Head
+                <select name="ministryHeadUserId" defaultValue={editing?.ministry_head_user_id ?? ""}>
+                  <option value="">Unassigned</option>
+                  {ministryHeads.map((leader) => (
+                    <option key={leader.id} value={leader.id}>
+                      {leaderLabel(leader)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label>
+                Ministry Head
+                <input value={editingHeadName} disabled />
+                <input type="hidden" name="ministryHeadUserId" value={editing?.ministry_head_user_id ?? session.id} />
+              </label>
+            )}
             <div className="campus-lead-list">
               <span className="leader-selector-title">Campus leads</span>
               {campusLeadsFor(editing).map((lead) => (
@@ -6465,9 +6682,9 @@ function MinistryMaintenance({
 
   return (
     <>
-      <Breadcrumbs items={[{ label: "Administration", onClick: close }, { label: "Ministry" }]} />
+      <Breadcrumbs items={[{ label: parentLabel, onClick: close }, { label: "Ministry" }]} />
       <PageTitle
-        eyebrow="Administration"
+        eyebrow={parentLabel}
         title="Ministry maintenance"
         description="Maintain ministries, ministry heads, and campus lead assignments."
       />
@@ -7535,6 +7752,18 @@ function formatDate(value: string) {
 }
 function formatDateRange(startsAt: string, endsAt: string) {
   return `${formatDate(startsAt)} – ${formatDate(endsAt)}`;
+}
+function toServiceTimeInput(value: string) {
+  const [hour = "09", minute = "45"] = value.split(":");
+  return `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+}
+function formatServiceTime(value: string) {
+  const [hour, minute] = toServiceTimeInput(value).split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return value;
+  return new Date(2000, 0, 1, hour, minute).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit"
+  });
 }
 function formatMessageTime(value: string) {
   return new Date(value).toLocaleString("en-US", {

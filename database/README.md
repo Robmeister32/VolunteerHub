@@ -36,6 +36,7 @@ Run the files in order using the Supabase SQL Editor:
 23. `023_ministry_request_per_campus.sql`
 24. `024_screener_scores.sql`
 25. `025_event_invite_email_template.sql`
+26. `026_campus_service_times.sql`
 
 The migrations create a private `volunteerhub` schema. Do not add it to Supabase's **Exposed schemas** list. The FastAPI service should connect directly to Postgres using a dedicated database role and perform authorization after verifying Firebase ID tokens.
 
@@ -74,6 +75,7 @@ FastAPI should generate short-lived signed URLs only after checking the caller's
 - `app_users`, `user_home_campuses`, `roles`, `app_user_roles`: Firebase identities, home-campus preferences, and assignable system roles
 - `volunteer_profiles`, `households`, `guardian_authorizations`: people and families
 - `ministries`, `ministry_roles`, `leader_ministries`, `ministry_campus_leads`, `user_ministry_memberships`, `ministry_membership_requests`: organizational authorization, campus leads, profile memberships, and volunteer membership approvals
+- `campus_service_times`: scheduled service times by campus
 - `requirement_definitions`, `role_requirements`, `volunteer_requirement_records`: compliance and training
 - `events`, `event_groups`, `assignments`, `assignment_change_requests`, `attendance`: scheduling, event locations, and participating campus targeting
 - `broadcasts`, `broadcast_deliveries`, `conversations`, `messages`, `outbox_jobs`: communication and provider work

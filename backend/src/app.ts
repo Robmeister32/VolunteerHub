@@ -1049,7 +1049,7 @@ app.get(
   "/api/administration/ministry-leader-candidates",
   requireAuth,
   route(async (req, res) => {
-    const isMinistryHead = req.user!.ministryIds.length > 0;
+    const isMinistryHead = hasRole(req.user!, "MINISTRY_HEAD");
     if (!hasRole(req.user!, "ADMIN") && !isMinistryHead)
       throw new ApiError("Only an administrator or Ministry Head can view ministry leader candidates", 403);
     const ministryHeads = await all(
@@ -1193,6 +1193,11 @@ const campusInput = z.object({
   timezone: z.string().trim().min(1),
   isActive: z.boolean().default(true)
 });
+const serviceDayInput = z.enum(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]);
+const campusServiceTimeInput = z.object({
+  serviceDay: serviceDayInput,
+  serviceTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/)
+});
 
 async function campusCoordinates(body: z.infer<typeof campusInput>) {
   if (
@@ -1284,6 +1289,120 @@ app.patch(
   })
 );
 
+async function campusForServiceTimes(campusId: string) {
+  const campus = await get<{ id: string; name: string }>("select id, name from campuses where id=$1", [campusId]);
+  if (!campus) throw new ApiError("Campus not found", 404);
+  return campus;
+}
+
+function serviceTimeBelongsToCampusSql(alias = "st") {
+  return `(${alias}.campus_id=$1 or (${alias}.campus_id is null and lower(${alias}.campus_name)=lower($2)))`;
+}
+
+app.get(
+  "/api/administration/campuses/:campusId/service-times",
+  requireAuth,
+  requireRole("ADMIN"),
+  route(async (req, res) => {
+    const campusId = uuid.parse(req.params.campusId);
+    const campus = await campusForServiceTimes(campusId);
+    res.json(
+      await all(
+        `select st.id, coalesce(st.campus_id, $1::uuid) campus_id, st.campus_name, st.service_day,
+         to_char(st.service_time, 'HH24:MI') service_time, st.created_at, st.updated_at
+         from campus_service_times st
+         where ${serviceTimeBelongsToCampusSql()}
+         order by case st.service_day
+           when 'Monday' then 1 when 'Tuesday' then 2 when 'Wednesday' then 3 when 'Thursday' then 4
+           when 'Friday' then 5 when 'Saturday' then 6 when 'Sunday' then 7 else 8 end,
+           st.service_time`,
+        [campus.id, campus.name]
+      )
+    );
+  })
+);
+
+app.post(
+  "/api/administration/campuses/:campusId/service-times",
+  requireAuth,
+  requireRole("ADMIN"),
+  route(async (req, res) => {
+    const campusId = uuid.parse(req.params.campusId);
+    const campus = await campusForServiceTimes(campusId);
+    const body = campusServiceTimeInput.parse(req.body);
+    const serviceTime = await get<{ id: string }>(
+      `insert into campus_service_times(campus_id, campus_name, service_day, service_time)
+       values($1,$2,$3,$4::time)
+       on conflict (campus_name, service_day, service_time) do nothing
+       returning id`,
+      [campus.id, campus.name, body.serviceDay, body.serviceTime]
+    );
+    if (!serviceTime) throw new ApiError("This service time already exists for the campus", 409);
+    await audit(req.user!.id, "CAMPUS_SERVICE_TIME_CREATED", "campus_service_time", serviceTime.id, {
+      campusId: campus.id,
+      ...body
+    });
+    res.status(201).json({ id: serviceTime.id });
+  })
+);
+
+app.patch(
+  "/api/administration/campuses/:campusId/service-times/:serviceTimeId",
+  requireAuth,
+  requireRole("ADMIN"),
+  route(async (req, res) => {
+    const campusId = uuid.parse(req.params.campusId);
+    const serviceTimeId = uuid.parse(req.params.serviceTimeId);
+    const campus = await campusForServiceTimes(campusId);
+    const body = campusServiceTimeInput.parse(req.body);
+    const duplicate = await get<{ id: string }>(
+      `select id from campus_service_times st
+       where st.id<>$5
+         and st.campus_name=$2
+         and st.service_day=$3
+         and st.service_time=$4::time
+         and ${serviceTimeBelongsToCampusSql()}`,
+      [campus.id, campus.name, body.serviceDay, body.serviceTime, serviceTimeId]
+    );
+    if (duplicate) throw new ApiError("This service time already exists for the campus", 409);
+    const serviceTime = await get<{ id: string }>(
+      `update campus_service_times st
+       set campus_id=$1, campus_name=$2, service_day=$3, service_time=$4::time
+       where st.id=$5 and ${serviceTimeBelongsToCampusSql()}
+       returning st.id`,
+      [campus.id, campus.name, body.serviceDay, body.serviceTime, serviceTimeId]
+    );
+    if (!serviceTime) throw new ApiError("Service time not found", 404);
+    await audit(req.user!.id, "CAMPUS_SERVICE_TIME_UPDATED", "campus_service_time", serviceTime.id, {
+      campusId: campus.id,
+      ...body
+    });
+    res.json({ message: "Service time updated" });
+  })
+);
+
+app.delete(
+  "/api/administration/campuses/:campusId/service-times/:serviceTimeId",
+  requireAuth,
+  requireRole("ADMIN"),
+  route(async (req, res) => {
+    const campusId = uuid.parse(req.params.campusId);
+    const serviceTimeId = uuid.parse(req.params.serviceTimeId);
+    const campus = await campusForServiceTimes(campusId);
+    const serviceTime = await get<{ id: string }>(
+      `delete from campus_service_times st
+       where st.id=$3 and ${serviceTimeBelongsToCampusSql()}
+       returning st.id`,
+      [campus.id, campus.name, serviceTimeId]
+    );
+    if (!serviceTime) throw new ApiError("Service time not found", 404);
+    await audit(req.user!.id, "CAMPUS_SERVICE_TIME_DELETED", "campus_service_time", serviceTime.id, {
+      campusId: campus.id
+    });
+    res.json({ message: "Service time deleted" });
+  })
+);
+
 const ministryCampusLeadInput = z.object({
   campusId: uuid,
   leadUserId: uuid.nullish()
@@ -1302,7 +1421,7 @@ app.get(
   requireAuth,
   route(async (req, res) => {
     const isAdmin = hasRole(req.user!, "ADMIN");
-    const isMinistryHead = req.user!.ministryIds.length > 0;
+    const isMinistryHead = hasRole(req.user!, "MINISTRY_HEAD");
     if (!isAdmin && !isMinistryHead)
       throw new ApiError("Only an administrator or Ministry Head can view ministry assignments", 403);
     res.json(
@@ -1405,12 +1524,18 @@ app.patch(
   route(async (req, res) => {
     const ministryId = uuid.parse(req.params.ministryId);
     const body = ministryInput.parse(req.body);
-    if (!hasRole(req.user!, "ADMIN")) {
+    const isAdmin = hasRole(req.user!, "ADMIN");
+    if (!isAdmin) {
+      if (!hasRole(req.user!, "MINISTRY_HEAD"))
+        throw new ApiError("Only an administrator or the assigned Ministry Head can update this ministry", 403);
       const canManage = await get("select 1 from leader_ministries where ministry_id=$1 and user_id=$2", [
         ministryId,
         req.user!.id
       ]);
-      if (!canManage) throw new ApiError("Only an administrator or the Ministry Head can update this ministry", 403);
+      if (!canManage)
+        throw new ApiError("Only an administrator or the assigned Ministry Head can update this ministry", 403);
+      if (body.ministryHeadUserId !== req.user!.id)
+        throw new ApiError("Only an administrator can reassign a Ministry Head", 403);
     }
     const ministry = await transaction(async (client) => {
       if (body.ministryHeadUserId) {

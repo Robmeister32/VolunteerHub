@@ -2946,6 +2946,103 @@ form.audit-search {
 .campus-actions .secondary {
   padding: 7px 9px;
 }
+.service-time-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.service-time-card-actions select {
+  min-width: 150px;
+  max-width: 210px;
+  padding: 8px 30px 8px 10px;
+}
+.card-header .service-time-action,
+.service-time-action {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border: 1px solid var(--line);
+  background: #f4f6f2;
+  color: var(--teal);
+  border-radius: 50%;
+  padding: 0;
+}
+.service-time-action.danger {
+  color: #af5847;
+  background: #fff6f3;
+}
+.service-time-action:hover:not(:disabled) {
+  border-color: #b7d5ca;
+  background: #eef7f3;
+}
+.service-time-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+.service-time-heading small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.service-time-table {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.service-time-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(95px, 0.8fr) auto;
+  align-items: center;
+  min-height: 43px;
+  border-bottom: 1px solid #edf1ee;
+}
+.service-time-row:last-child {
+  border-bottom: 0;
+}
+.service-time-row > span,
+.service-time-row > label {
+  min-width: 0;
+  padding: 8px 10px;
+}
+.service-time-header {
+  min-height: 34px;
+  background: #f5f8f6;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.service-time-form-row {
+  background: #fbfdfc;
+}
+.service-time-form-row select,
+.service-time-form-row input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 9px;
+}
+.service-time-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.service-time-empty {
+  padding: 16px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
 .campus-form input[readonly],
 .campus-form textarea[readonly] {
   color: var(--muted);
@@ -3604,5 +3701,20 @@ form.audit-search {
   .campus-actions {
     width: auto;
     padding-left: 0;
+  }
+  .service-time-card-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .service-time-card-actions select {
+    min-width: 0;
+    flex: 1;
+  }
+  .service-time-row {
+    grid-template-columns: minmax(90px, 1fr) minmax(85px, 0.9fr) auto;
+  }
+  .service-time-row > span,
+  .service-time-row > label {
+    padding: 8px;
   }
 }
