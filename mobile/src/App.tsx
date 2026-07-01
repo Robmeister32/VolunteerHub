@@ -230,7 +230,7 @@ interface EmailTemplate {
   name: string;
   subject: string;
   body: string;
-  created_by: string;
+  created_by: string | null;
   creator_name: string;
   is_active: boolean;
   can_edit: boolean;

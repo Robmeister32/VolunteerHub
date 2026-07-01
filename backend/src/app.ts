@@ -53,6 +53,13 @@ const emailTemplateVariables = [
     example: "6:00 PM"
   },
   {
+    token: "{{event.registration_url}}",
+    label: "Event registration link",
+    description: "A direct link to the event registration form",
+    category: "Event",
+    example: "https://volunteerhub.example/events/abc/register"
+  },
+  {
     token: "{{team.name}}",
     label: "Team name",
     description: "The volunteer's event team",
@@ -942,11 +949,12 @@ app.get(
     const isAdmin = hasRole(req.user!, "ADMIN");
     const canManageTemplates = isAdmin || hasRole(req.user!, "EVENT_LEADER");
     const rows = await all<Record<string, unknown>>(
-      `select et.*, coalesce(u.display_name, u.email) creator_name
+      `select et.*, coalesce(u.display_name, u.email, 'VolunteerHub') creator_name
        from email_templates et
-       join app_users u on u.id=et.created_by
+       left join app_users u on u.id=et.created_by
        where $1::boolean
           or et.created_by=$2
+          or et.created_by is null
           or ($3::boolean and et.is_active)
        order by et.is_active desc, et.updated_at desc, et.name`,
       [isAdmin, req.user!.id, !canManageTemplates]
@@ -954,7 +962,9 @@ app.get(
     res.json(
       rows.map((row) => ({
         ...row,
-        can_edit: isAdmin || (hasRole(req.user!, "EVENT_LEADER") && row.created_by === req.user!.id)
+        can_edit:
+          typeof row.created_by === "string" &&
+          (isAdmin || (hasRole(req.user!, "EVENT_LEADER") && row.created_by === req.user!.id))
       }))
     );
   })
@@ -985,8 +995,9 @@ app.patch(
     const id = uuid.parse(req.params.id);
     const body = emailTemplateSchema.parse(req.body);
     validateEmailTemplateVariables(body.subject, body.body);
-    const existing = await get<{ created_by: string }>("select created_by from email_templates where id=$1", [id]);
+    const existing = await get<{ created_by: string | null }>("select created_by from email_templates where id=$1", [id]);
     if (!existing) throw new ApiError("Email template not found", 404);
+    if (!existing.created_by) throw new ApiError("System email templates cannot be edited", 403);
     const isAdmin = hasRole(req.user!, "ADMIN");
     if (!isAdmin && existing.created_by !== req.user!.id)
       throw new ApiError("Only the template creator can edit this template", 403);
