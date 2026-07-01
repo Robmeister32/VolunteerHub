@@ -1998,8 +1998,8 @@ function EventTeamManagement({
   });
   const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
   const [teamLeaders, setTeamLeaders] = useState<EventLeader[]>([]);
-  const [editingEvent, setEditingEvent] = useState(false);
-  const [addingTeam, setAddingTeam] = useState(false);
+  const [editMode, setEditMode] = useState<"view" | "edit-event" | "add-team" | "edit-team">("view");
+  const [editingTeam, setEditingTeam] = useState<EventGroupItem | null>(null);
   const [expandedTeamId, setExpandedTeamId] = useState(event.groups[0]?.id ?? "");
   const [savingEvent, setSavingEvent] = useState(false);
   const [editCampusId, setEditCampusId] = useState(event.campus_id);
@@ -2078,7 +2078,7 @@ function EventTeamManagement({
           status
         })
       });
-      setEditingEvent(false);
+      setEditMode("view");
       notify("Event updated.");
       await saved();
     } catch (error) {
@@ -2120,8 +2120,9 @@ function EventTeamManagement({
           body: JSON.stringify(payload)
         }
       );
-      setAddingTeam(false);
       setExpandedTeamId(team?.id ?? ("id" in result ? result.id : ""));
+      setEditingTeam(null);
+      setEditMode("view");
       notify(team ? "Event team updated." : "Event team added.");
       await saved();
     } catch (error) {
@@ -2143,61 +2144,17 @@ function EventTeamManagement({
     }
   };
 
-  return (
-    <>
-      <Breadcrumbs items={[{ label: "Events and Teams", onClick: back }, { label: event.name }]} />
-      <PageTitle
-        eyebrow="Schedule"
-        title="Event Team Management"
-        description={`Manage teams, staffing, and policies for ${event.name}.`}
-      />
-      <section className="event-management-banner">
-        <div>
-          <span className="eyebrow">Event details</span>
-          <h2>{event.name}</h2>
-          <p>{event.description || "No event description has been added."}</p>
-          {canEdit && (
-            <div className="event-management-actions">
-              <button className="secondary" type="button" onClick={() => setEditingEvent((current) => !current)}>
-                <Pencil size={15} /> {editingEvent ? "Close edit" : "Edit event"}
-              </button>
-              <button className="secondary danger" type="button" onClick={deleteEvent}>
-                <Trash2 size={15} /> Delete event
-              </button>
-            </div>
-          )}
-        </div>
-        <div className="event-management-facts">
-          <span className="event-date-fact">
-            <CalendarDays size={18} />
-            <span className="event-date-range">
-              <span>
-                <strong>{formatDate(event.starts_at)}&nbsp;-</strong>
-              </span>
-              <span>
-                <strong>{formatDate(event.ends_at)}</strong>
-              </span>
-            </span>
-          </span>
-          <span>
-            <MapPin size={18} />
-            <strong>{eventLocation(event)}</strong>
-          </span>
-          <span>
-            <Users size={18} />
-            <strong>
-              {event.confirmed_count}/{event.required_count} staffed
-            </strong>
-          </span>
-          <span>
-            <ClipboardCheck size={18} />
-            <strong>
-              {event.groups.length} team{event.groups.length === 1 ? "" : "s"}
-            </strong>
-          </span>
-        </div>
-      </section>
-      {editingEvent && (
+  if (editMode === "edit-event") {
+    return (
+      <>
+        <Breadcrumbs
+          items={[
+            { label: "Events and Teams", onClick: back },
+            { label: event.name, onClick: () => setEditMode("view") },
+            { label: "Edit Event" }
+          ]}
+        />
+        <PageTitle eyebrow="Schedule" title="Edit Event" description={`Update details for ${event.name}.`} />
         <form className="card event-management-edit-form" onSubmit={saveEvent}>
           <MaintenanceFormTitle
             icon={<CalendarDays />}
@@ -2231,6 +2188,7 @@ function EventTeamManagement({
                   if (campus) useEditCampusLocation(campus);
                 }}
               >
+                {!catalog.campuses.length && <option value={event.campus_id}>{event.campus_name}</option>}
                 {catalog.campuses.map((campus) => (
                   <option key={campus.id} value={campus.id}>
                     {campus.name}
@@ -2268,7 +2226,7 @@ function EventTeamManagement({
           </div>
           <LeaderSelector leaders={eventLeaders} selectedIds={event.event_leader_user_ids ?? []} title="Event leader" />
           <div className="card-actions">
-            <button className="secondary" type="button" onClick={() => setEditingEvent(false)}>
+            <button className="secondary" type="button" onClick={() => setEditMode("view")}>
               Cancel
             </button>
             <button className="primary" disabled={savingEvent}>
@@ -2276,7 +2234,166 @@ function EventTeamManagement({
             </button>
           </div>
         </form>
-      )}
+      </>
+    );
+  }
+
+  if (editMode === "add-team" || editMode === "edit-team") {
+    const team = editMode === "edit-team" ? editingTeam : null;
+    const title = team ? "Edit Event Team" : "Add Event Team";
+    return (
+      <>
+        <Breadcrumbs
+          items={[
+            { label: "Events and Teams", onClick: back },
+            { label: event.name, onClick: () => setEditMode("view") },
+            { label: title }
+          ]}
+        />
+        <PageTitle eyebrow="Schedule" title={title} description={`Manage teams for ${event.name}.`} />
+        <form className="card event-management-edit-form" onSubmit={(formEvent) => saveTeam(team, formEvent)}>
+          <MaintenanceFormTitle
+            icon={<Users />}
+            title={team ? team.name : "New event team"}
+            description="Update team details, staffing goals, policies, and leaders."
+          />
+          <label>
+            Ministry
+            <select name="name" defaultValue={team?.name ?? "Open"} required>
+              <option value="Open">Open</option>
+              {team?.name &&
+                team.name !== "Open" &&
+                !catalog.ministries.some((ministry) => ministry.name === team.name) && (
+                  <option value={team.name}>{team.name}</option>
+                )}
+              {catalog.ministries.map((ministry) => (
+                <option key={ministry.id} value={ministry.name}>
+                  {ministry.name}
+                </option>
+              ))}
+            </select>
+            <small className="form-help">Open allows any volunteer from a participating campus to join.</small>
+          </label>
+          <label>
+            Description
+            <textarea name="description" rows={2} defaultValue={team?.description ?? ""} required />
+          </label>
+          <label>
+            Instructions
+            <textarea name="instructions" rows={2} defaultValue={team?.instructions ?? ""} />
+          </label>
+          <div className="two-col">
+            <Field
+              name="requiredVolunteerCount"
+              label="Volunteers required"
+              type="number"
+              defaultValue={team?.required_count ?? 0}
+            />
+            <label>
+              Signup policy
+              <select name="signupPolicy" defaultValue={team?.signup_policy ?? "AUTO"}>
+                <option value="AUTO">Automatic confirmation</option>
+                <option value="APPROVAL">Leader approval</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            Move/swap policy
+            <select name="movementPolicy" defaultValue={team?.movement_policy ?? "AUTO"}>
+              <option value="AUTO">Automatic confirmation</option>
+              <option value="APPROVAL">Leader approval</option>
+            </select>
+          </label>
+          <LeaderSelector
+            key={`event-team-leaders-${team?.id ?? "new"}-${(team?.leader_user_ids ?? []).join("|")}`}
+            leaders={teamLeaderOptions}
+            selectedIds={team?.leader_user_ids ?? []}
+            inputName="teamLeaderUserIds"
+            title="Team leaders"
+            searchPlaceholder="Search Administrators, Event Leaders, Team Leaders, or Ministry Heads"
+            emptyMessage="No eligible team leaders match this event campus."
+          />
+          <label className="check-label">
+            <input name="selfCheckinEnabled" type="checkbox" defaultChecked={team?.self_checkin_enabled ?? false} />
+            Enable location-bound self check-in
+          </label>
+          <div className="card-actions">
+            <button className="secondary" type="button" onClick={() => setEditMode("view")}>
+              Cancel
+            </button>
+            <button className="primary">{team ? "Save event team" : "Add event team"}</button>
+          </div>
+        </form>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Breadcrumbs items={[{ label: "Events and Teams", onClick: back }, { label: event.name }]} />
+      <PageTitle
+        eyebrow="Schedule"
+        title="Event Team Management"
+        description={`Manage teams, staffing, and policies for ${event.name}.`}
+      />
+      <section className="event-management-banner">
+        <div>
+          <span className="eyebrow">Event details</span>
+          <h2>{event.name}</h2>
+          <p>{event.description || "No event description has been added."}</p>
+          {canEdit && (
+            <div className="event-management-actions">
+              <button
+                className="icon-button event-management-icon-button"
+                type="button"
+                aria-label="Edit event"
+                title="Edit event"
+                onClick={() => setEditMode("edit-event")}
+              >
+                <Pencil size={16} />
+              </button>
+              <button
+                className="icon-button event-management-icon-button danger"
+                type="button"
+                aria-label="Delete event"
+                title="Delete event"
+                onClick={deleteEvent}
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="event-management-facts">
+          <span className="event-date-fact">
+            <CalendarDays size={18} />
+            <span className="event-date-range">
+              <span>
+                <strong>{formatDate(event.starts_at)}&nbsp;-</strong>
+              </span>
+              <span>
+                <strong>{formatDate(event.ends_at)}</strong>
+              </span>
+            </span>
+          </span>
+          <span>
+            <MapPin size={18} />
+            <strong>{eventLocation(event)}</strong>
+          </span>
+          <span>
+            <Users size={18} />
+            <strong>
+              {event.confirmed_count}/{event.required_count} staffed
+            </strong>
+          </span>
+          <span>
+            <ClipboardCheck size={18} />
+            <strong>
+              {event.groups.length} team{event.groups.length === 1 ? "" : "s"}
+            </strong>
+          </span>
+        </div>
+      </section>
       <Card
         title="Teams"
         action={
@@ -2284,8 +2401,8 @@ function EventTeamManagement({
             <button
               type="button"
               onClick={() => {
-                setAddingTeam(true);
-                setExpandedTeamId("new");
+                setEditingTeam(null);
+                setEditMode("add-team");
               }}
             >
               <Plus size={16} /> Add event team
@@ -2301,32 +2418,17 @@ function EventTeamManagement({
               index={index}
               expanded={expandedTeamId === team.id}
               canEdit={canEdit}
-              ministries={catalog.ministries}
-              leaders={teamLeaderOptions}
               leaderNameById={leaderNameById}
               onToggle={() => setExpandedTeamId(expandedTeamId === team.id ? "" : team.id)}
-              onSubmit={(formEvent) => saveTeam(team, formEvent)}
+              onEdit={() => {
+                setEditingTeam(team);
+                setEditMode("edit-team");
+              }}
               onDelete={() => deleteTeam(team)}
               deleteDisabled={event.status === "ACTIVE" && event.groups.length <= 1}
             />
           ))}
-          {addingTeam && (
-            <EventTeamAccordionCard
-              index={event.groups.length}
-              expanded={expandedTeamId === "new"}
-              canEdit={canEdit}
-              ministries={catalog.ministries}
-              leaders={teamLeaderOptions}
-              leaderNameById={leaderNameById}
-              onToggle={() => setExpandedTeamId(expandedTeamId === "new" ? "" : "new")}
-              onSubmit={(formEvent) => saveTeam(null, formEvent)}
-              onCancel={() => {
-                setAddingTeam(false);
-                setExpandedTeamId(event.groups[0]?.id ?? "");
-              }}
-            />
-          )}
-          {!event.groups.length && !addingTeam && <Empty text="No event teams have been added yet." />}
+          {!event.groups.length && <Empty text="No event teams have been added yet." />}
         </div>
       </Card>
     </>
@@ -2338,26 +2440,20 @@ function EventTeamAccordionCard({
   index,
   expanded,
   canEdit,
-  ministries,
-  leaders,
   leaderNameById,
   onToggle,
-  onSubmit,
+  onEdit,
   onDelete,
-  onCancel,
   deleteDisabled = false
 }: {
   team?: EventGroupItem;
   index: number;
   expanded: boolean;
   canEdit: boolean;
-  ministries: Ministry[];
-  leaders: EventLeader[];
   leaderNameById: Map<string, string>;
   onToggle: () => void;
-  onSubmit: (formEvent: FormEvent<HTMLFormElement>) => void;
+  onEdit?: () => void;
   onDelete?: () => void;
-  onCancel?: () => void;
   deleteDisabled?: boolean;
 }) {
   const selectedLeaderIds = team?.leader_user_ids ?? [];
@@ -2372,16 +2468,32 @@ function EventTeamAccordionCard({
           <h3>{teamName}</h3>
           <small>{team?.description || "No description"}</small>
         </button>
-        {canEdit && onDelete && (
-          <button
-            className="secondary danger"
-            type="button"
-            disabled={deleteDisabled}
-            title={deleteDisabled ? "An active event must have at least one event team" : `Delete ${teamName}`}
-            onClick={onDelete}
-          >
-            <Trash2 size={16} /> Delete
-          </button>
+        {canEdit && (
+          <div className="event-team-card-actions">
+            {onEdit && (
+              <button
+                className="icon-button event-management-icon-button"
+                type="button"
+                aria-label={`Edit ${teamName}`}
+                title={`Edit ${teamName}`}
+                onClick={onEdit}
+              >
+                <Pencil size={16} />
+              </button>
+            )}
+            {onDelete && (
+              <button
+                className="icon-button event-management-icon-button danger"
+                type="button"
+                disabled={deleteDisabled}
+                aria-label={`Delete ${teamName}`}
+                title={deleteDisabled ? "An active event must have at least one event team" : `Delete ${teamName}`}
+                onClick={onDelete}
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
+          </div>
         )}
       </div>
       <div className="team-card-metrics">
@@ -2409,81 +2521,6 @@ function EventTeamAccordionCard({
         <small>Leaders</small>
         <strong>{leaderNames.length ? leaderNames.join(", ") : "No leaders assigned"}</strong>
       </span>
-      {expanded && canEdit && (
-        <form className="event-template-team-fields" onSubmit={onSubmit}>
-          <label>
-            Ministry
-            <select name="name" defaultValue={teamName} disabled={!canEdit} required>
-              <option value="Open">Open</option>
-              {teamName !== "Open" && !ministries.some((ministry) => ministry.name === teamName) && (
-                <option value={teamName}>{teamName}</option>
-              )}
-              {ministries.map((ministry) => (
-                <option key={ministry.id} value={ministry.name}>
-                  {ministry.name}
-                </option>
-              ))}
-            </select>
-            <small className="form-help">Open allows any volunteer from a participating campus to join.</small>
-          </label>
-          <label>
-            Description
-            <textarea name="description" rows={2} defaultValue={team?.description ?? ""} required disabled={!canEdit} />
-          </label>
-          <label>
-            Instructions
-            <textarea name="instructions" rows={2} defaultValue={team?.instructions ?? ""} disabled={!canEdit} />
-          </label>
-          <div className="two-col">
-            <Field
-              name="requiredVolunteerCount"
-              label="Volunteers required"
-              type="number"
-              defaultValue={team?.required_count ?? 0}
-            />
-            <label>
-              Signup policy
-              <select name="signupPolicy" defaultValue={team?.signup_policy ?? "AUTO"} disabled={!canEdit}>
-                <option value="AUTO">Automatic confirmation</option>
-                <option value="APPROVAL">Leader approval</option>
-              </select>
-            </label>
-          </div>
-          <label>
-            Move/swap policy
-            <select name="movementPolicy" defaultValue={team?.movement_policy ?? "AUTO"} disabled={!canEdit}>
-              <option value="AUTO">Automatic confirmation</option>
-              <option value="APPROVAL">Leader approval</option>
-            </select>
-          </label>
-          <LeaderSelector
-            key={`event-team-leaders-${team?.id ?? "new"}-${selectedLeaderIds.join("|")}`}
-            leaders={leaders}
-            selectedIds={selectedLeaderIds}
-            inputName="teamLeaderUserIds"
-            title="Team leaders"
-            searchPlaceholder="Search Administrators, Event Leaders, Team Leaders, or Ministry Heads"
-            emptyMessage="No eligible team leaders match this event campus."
-          />
-          <label className="check-label">
-            <input
-              name="selfCheckinEnabled"
-              type="checkbox"
-              defaultChecked={team?.self_checkin_enabled ?? false}
-              disabled={!canEdit}
-            />
-            Enable location-bound self check-in
-          </label>
-          <div className="card-actions">
-            {onCancel && (
-              <button className="secondary" type="button" onClick={onCancel}>
-                Cancel
-              </button>
-            )}
-            <button className="primary">{team ? "Save event team" : "Add event team"}</button>
-          </div>
-        </form>
-      )}
     </article>
   );
 }
