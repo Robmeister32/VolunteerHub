@@ -1929,7 +1929,7 @@ function EventCard({
             <span>{eventStatusBadgeLabel(event)}</span>
           </span>
         </div>
-        {!serveMode && hasRole(session, "ADMIN") ? (
+        {!serveMode && canCreateOneOffEvents(session) ? (
           <div className="event-card-top-actions">
             <button className="secondary" onClick={onEdit}>
               <Pencil size={15} /> Edit
@@ -1991,7 +1991,7 @@ function EventTeamManagement({
   saved: () => Promise<void>;
   notify: (message: string) => void;
 }) {
-  const canEdit = hasRole(session, "ADMIN");
+  const canEdit = hasRole(session, "ADMIN") || hasRole(session, "EVENT_LEADER");
   const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>({
     campuses: [],
     ministries: []
@@ -2088,7 +2088,7 @@ function EventTeamManagement({
     }
   };
   const deleteEvent = async () => {
-    if (!window.confirm(`Delete ${event.name}?\n\nThis removes the event from active schedules.`)) return;
+    if (!window.confirm("Deleting Event. Are you sure")) return;
     try {
       await api(`/events/${event.id}`, { method: "DELETE" });
       notify("Event deleted.");
@@ -2134,7 +2134,7 @@ function EventTeamManagement({
       notify("An active event must have at least one event team.");
       return;
     }
-    if (!window.confirm(`Delete ${team.name}?\n\nThis removes the event team from this event.`)) return;
+    if (!window.confirm(`Deleting Team ${team.name}. Are You sure?`)) return;
     try {
       await api(`/event-groups/${team.id}`, { method: "DELETE" });
       notify("Event team deleted.");
@@ -2573,7 +2573,7 @@ function EventDrawer({
   useEffect(() => {
     if (!serveMode && session.role !== "VOLUNTEER")
       api<Array<Record<string, string | number>>>(`/events/${event.id}/roster`).then(setRoster);
-    if (!serveMode && hasRole(session, "ADMIN"))
+    if (!serveMode && canCreateOneOffEvents(session))
       Promise.all([
         api<{ campuses: CampusCatalogItem[] }>("/catalog"),
         api<EventLeader[]>("/administration/event-leaders")
@@ -2675,7 +2675,7 @@ function EventDrawer({
         <span className="eyebrow">{event.campus_name}</span>
         <h2>{event.name}</h2>
         <p>{event.description}</p>
-        {!serveMode && !editingEvent && hasRole(session, "ADMIN") && (
+        {!serveMode && !editingEvent && canCreateOneOffEvents(session) && (
           <button className="secondary full" onClick={() => setEditingEvent(true)}>
             <Pencil size={16} /> Edit event
           </button>

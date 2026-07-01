@@ -1003,7 +1003,7 @@ app.patch(
 app.get(
   "/api/administration/event-leaders",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER"),
   route(async (_req, res) => {
     res.json(
       await all(
@@ -2075,7 +2075,7 @@ app.post(
 app.patch(
   "/api/events/:eventId",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER"),
   route(async (req, res) => {
     const eventId = uuid.parse(req.params.eventId);
     const body = eventUpdateInput.parse(req.body);
@@ -2249,9 +2249,6 @@ app.patch(
       [eventId]
     );
     if (!existing) return void res.status(404).json({ error: "Event not found" });
-    if (!hasRole(req.user!, "ADMIN") && !existing.event_leader_user_ids.includes(req.user!.id)) {
-      throw new ApiError("Outside your event scope", 403);
-    }
     await transaction(async (client) => {
       await ensureActiveEventHasTeams(client, eventId, status);
       await client.query("update events set status=$1 where id=$2", [status, eventId]);
@@ -2264,7 +2261,7 @@ app.patch(
 app.delete(
   "/api/events/:eventId",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER"),
   route(async (req, res) => {
     const eventId = uuid.parse(req.params.eventId);
     const event = await get<{ id: string; name: string }>(
@@ -2280,7 +2277,7 @@ app.delete(
 app.post(
   "/api/events/:eventId/groups",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER"),
   route(async (req, res) => {
     const eventId = uuid.parse(req.params.eventId);
     const body = eventGroupInput.parse(req.body);
@@ -2310,7 +2307,7 @@ app.post(
 app.patch(
   "/api/event-groups/:eventGroupId",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER"),
   route(async (req, res) => {
     const eventGroupId = uuid.parse(req.params.eventGroupId);
     const body = eventGroupInput.parse(req.body);
@@ -2352,7 +2349,7 @@ app.patch(
 app.delete(
   "/api/event-groups/:eventGroupId",
   requireAuth,
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EVENT_LEADER"),
   route(async (req, res) => {
     const eventGroupId = uuid.parse(req.params.eventGroupId);
     const group = await transaction(async (client) => {
