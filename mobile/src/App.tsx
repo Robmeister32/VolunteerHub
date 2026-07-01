@@ -1121,7 +1121,6 @@ function Events({
   const [selected, setSelected] = useState<EventItem | null>(null);
   const [editSelected, setEditSelected] = useState(false);
   const [managing, setManaging] = useState<EventItem | null>(null);
-  const [editingTeam, setEditingTeam] = useState<EventGroupItem | null | undefined>(undefined);
   const [creating, setCreating] = useState(false);
   const debouncedEventSearch = useDebouncedValue(eventSearch);
   const load = useCallback(
@@ -1204,21 +1203,9 @@ function Events({
           event={managing}
           session={session}
           back={() => setManaging(null)}
-          addTeam={() => setEditingTeam(null)}
-          editTeam={(team) => setEditingTeam(team)}
+          saved={refreshEvents}
+          notify={notify}
         />
-        {editingTeam !== undefined && (
-          <EventTeamEditor
-            event={managing}
-            team={editingTeam}
-            close={() => setEditingTeam(undefined)}
-            saved={async () => {
-              setEditingTeam(undefined);
-              await refreshEvents();
-            }}
-            notify={notify}
-          />
-        )}
       </>
     );
   return (
@@ -1995,19 +1982,167 @@ function EventTeamManagement({
   event,
   session,
   back,
-  addTeam,
-  editTeam
+  saved,
+  notify
 }: {
   event: EventItem;
   session: Session;
   back: () => void;
-  addTeam: () => void;
-  editTeam: (team: EventGroupItem) => void;
+  saved: () => Promise<void>;
+  notify: (message: string) => void;
 }) {
-  const [leaders, setLeaders] = useState<EventLeader[]>([]);
+  const canEdit = hasRole(session, "ADMIN");
+  const [catalog, setCatalog] = useState<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>({
+    campuses: [],
+    ministries: []
+  });
+  const [eventLeaders, setEventLeaders] = useState<EventLeader[]>([]);
+  const [teamLeaders, setTeamLeaders] = useState<EventLeader[]>([]);
+  const [editingEvent, setEditingEvent] = useState(false);
+  const [addingTeam, setAddingTeam] = useState(false);
+  const [expandedTeamId, setExpandedTeamId] = useState(event.groups[0]?.id ?? "");
+  const [savingEvent, setSavingEvent] = useState(false);
+  const [editCampusId, setEditCampusId] = useState(event.campus_id);
+  const [editLocation, setEditLocation] = useState({
+    address: event.address,
+    latitude: String(event.latitude),
+    longitude: String(event.longitude)
+  });
+
   useEffect(() => {
-    if (hasRole(session, "ADMIN")) void api<EventLeader[]>("/administration/team-leaders").then(setLeaders);
-  }, [session]);
+    setExpandedTeamId((current) => current || event.groups[0]?.id || "");
+    setEditCampusId(event.campus_id);
+    setEditLocation({
+      address: event.address,
+      latitude: String(event.latitude),
+      longitude: String(event.longitude)
+    });
+  }, [event.id, event.campus_id, event.address, event.latitude, event.longitude, event.groups]);
+
+  useEffect(() => {
+    if (!canEdit) return;
+    Promise.all([
+      api<{ campuses: CampusCatalogItem[]; ministries: Ministry[] }>("/catalog"),
+      api<{ eventLeaders: EventLeader[]; teamLeaders: EventLeader[] }>("/tools/event-template-leaders")
+    ])
+      .then(([catalogRows, leaderRows]) => {
+        setCatalog(catalogRows);
+        setEventLeaders(leaderRows.eventLeaders);
+        setTeamLeaders(leaderRows.teamLeaders);
+      })
+      .catch((error) => notify((error as Error).message));
+  }, [canEdit, notify]);
+
+  const participatingCampusIds = event.participating_campus_ids?.length
+    ? event.participating_campus_ids
+    : [event.campus_id];
+  const teamLeaderOptions = teamLeaders.filter((leader) => {
+    if (!participatingCampusIds.length) return true;
+    if (!leader.campus_ids?.length) return true;
+    return leader.campus_ids.some((campusId) => participatingCampusIds.includes(campusId));
+  });
+  const leaderNameById = new Map(teamLeaders.map((leader) => [leader.id, leader.display_name || leader.email]));
+  const useEditCampusLocation = (campus: CampusCatalogItem) => {
+    setEditCampusId(campus.id);
+    setEditLocation({
+      address: campus.address ?? "",
+      latitude: campus.latitude === null || campus.latitude === undefined ? "" : String(campus.latitude),
+      longitude: campus.longitude === null || campus.longitude === undefined ? "" : String(campus.longitude)
+    });
+  };
+  const saveEvent = async (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    const formData = new FormData(formEvent.currentTarget);
+    const data = Object.fromEntries(formData);
+    const status = String(data.status) as EventStatus;
+    if (status === "ACTIVE" && event.groups.length < 1) {
+      notify("Add at least one event team before making this event Active.");
+      return;
+    }
+    setSavingEvent(true);
+    try {
+      await api(`/events/${event.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          campusId: String(data.campusId),
+          name: data.name,
+          description: data.description,
+          startsAt: new Date(String(data.startsAt)).toISOString(),
+          endsAt: new Date(String(data.endsAt)).toISOString(),
+          address: data.address,
+          latitude: Number(data.latitude),
+          longitude: Number(data.longitude),
+          eventLeaderUserIds: formData.getAll("eventLeaderUserIds").map(String),
+          locationType: event.location_type ?? "CAMPUS",
+          participatingCampusIds,
+          status
+        })
+      });
+      setEditingEvent(false);
+      notify("Event updated.");
+      await saved();
+    } catch (error) {
+      notify((error as Error).message);
+    } finally {
+      setSavingEvent(false);
+    }
+  };
+  const deleteEvent = async () => {
+    if (!window.confirm(`Delete ${event.name}?\n\nThis removes the event from active schedules.`)) return;
+    try {
+      await api(`/events/${event.id}`, { method: "DELETE" });
+      notify("Event deleted.");
+      back();
+      await saved();
+    } catch (error) {
+      notify((error as Error).message);
+    }
+  };
+  const saveTeam = async (team: EventGroupItem | null, formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    const formData = new FormData(formEvent.currentTarget);
+    const payload = {
+      name: String(formData.get("name") ?? "").trim(),
+      description: String(formData.get("description") ?? "").trim(),
+      instructions: String(formData.get("instructions") ?? "").trim(),
+      leaderUserIds: formData.getAll("teamLeaderUserIds").map(String),
+      requiredVolunteerCount: Number(formData.get("requiredVolunteerCount") ?? 0),
+      signupPolicy: String(formData.get("signupPolicy")) as EventTemplateTeam["signupPolicy"],
+      movementPolicy: String(formData.get("movementPolicy")) as EventTemplateTeam["movementPolicy"],
+      selfCheckinEnabled: formData.get("selfCheckinEnabled") === "on",
+      isActive: true
+    };
+    try {
+      const result = await api<{ id: string } | { message: string }>(
+        team ? `/event-groups/${team.id}` : `/events/${event.id}/groups`,
+        {
+          method: team ? "PATCH" : "POST",
+          body: JSON.stringify(payload)
+        }
+      );
+      setAddingTeam(false);
+      setExpandedTeamId(team?.id ?? ("id" in result ? result.id : ""));
+      notify(team ? "Event team updated." : "Event team added.");
+      await saved();
+    } catch (error) {
+      notify((error as Error).message);
+    }
+  };
+  const deleteTeam = async (team: EventGroupItem) => {
+    if (event.status === "ACTIVE" && event.groups.length <= 1) {
+      notify("An active event must have at least one event team.");
+      return;
+    }
+    if (!window.confirm(`Delete ${team.name}?\n\nThis removes the event team from this event.`)) return;
+    try {
+      await api(`/event-groups/${team.id}`, { method: "DELETE" });
+      notify("Event team deleted.");
+      await saved();
+    } catch (error) {
+      notify((error as Error).message);
+    }
+  };
+
   return (
     <>
       <Breadcrumbs items={[{ label: "Events and Teams", onClick: back }, { label: event.name }]} />
@@ -2021,6 +2156,16 @@ function EventTeamManagement({
           <span className="eyebrow">Event details</span>
           <h2>{event.name}</h2>
           <p>{event.description || "No event description has been added."}</p>
+          {canEdit && (
+            <div className="event-management-actions">
+              <button className="secondary" type="button" onClick={() => setEditingEvent((current) => !current)}>
+                <Pencil size={15} /> {editingEvent ? "Close edit" : "Edit event"}
+              </button>
+              <button className="secondary danger" type="button" onClick={deleteEvent}>
+                <Trash2 size={15} /> Delete event
+              </button>
+            </div>
+          )}
         </div>
         <div className="event-management-facts">
           <span className="event-date-fact">
@@ -2052,196 +2197,294 @@ function EventTeamManagement({
           </span>
         </div>
       </section>
+      {editingEvent && (
+        <form className="card event-management-edit-form" onSubmit={saveEvent}>
+          <MaintenanceFormTitle
+            icon={<CalendarDays />}
+            title="Edit Event"
+            description="Update event details, status, location, and event leaders."
+          />
+          <Field name="name" label="Event name" defaultValue={event.name} />
+          <label>
+            Description
+            <textarea name="description" rows={3} defaultValue={event.description} required />
+          </label>
+          <div className="two-col">
+            <label>
+              Event status
+              <select name="status" defaultValue={event.status}>
+                {eventStatuses.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Campus
+              <select
+                name="campusId"
+                value={editCampusId}
+                required
+                onChange={(changeEvent) => {
+                  const campus = catalog.campuses.find((item) => item.id === changeEvent.target.value);
+                  if (campus) useEditCampusLocation(campus);
+                }}
+              >
+                {catalog.campuses.map((campus) => (
+                  <option key={campus.id} value={campus.id}>
+                    {campus.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="two-col">
+            <DateTimeField name="startsAt" label="Starts" defaultValue={toDateTimeLocal(event.starts_at)} />
+            <DateTimeField name="endsAt" label="Ends" defaultValue={toDateTimeLocal(event.ends_at)} />
+          </div>
+          <label>
+            Address
+            <input
+              name="address"
+              value={editLocation.address}
+              required
+              onChange={(changeEvent) => setEditLocation({ ...editLocation, address: changeEvent.target.value })}
+            />
+          </label>
+          <div className="two-col">
+            <LocationField
+              name="latitude"
+              label="Latitude"
+              value={editLocation.latitude}
+              onChange={(value) => setEditLocation({ ...editLocation, latitude: value })}
+            />
+            <LocationField
+              name="longitude"
+              label="Longitude"
+              value={editLocation.longitude}
+              onChange={(value) => setEditLocation({ ...editLocation, longitude: value })}
+            />
+          </div>
+          <LeaderSelector leaders={eventLeaders} selectedIds={event.event_leader_user_ids ?? []} title="Event leader" />
+          <div className="card-actions">
+            <button className="secondary" type="button" onClick={() => setEditingEvent(false)}>
+              Cancel
+            </button>
+            <button className="primary" disabled={savingEvent}>
+              {savingEvent ? "Saving..." : "Save event"}
+            </button>
+          </div>
+        </form>
+      )}
       <Card
         title="Teams"
         action={
-          hasRole(session, "ADMIN") ? (
-            <button onClick={addTeam}>
+          canEdit ? (
+            <button
+              type="button"
+              onClick={() => {
+                setAddingTeam(true);
+                setExpandedTeamId("new");
+              }}
+            >
               <Plus size={16} /> Add event team
             </button>
           ) : undefined
         }
       >
-        <div className="ministry-group event-team-group">
-          <div className="table campus-table event-team-table">
-            {event.groups.map((team) => (
-              <EventTeamRow
-                key={team.id}
-                team={team}
-                leaders={leaders.filter((leader) => team.leader_user_ids.includes(leader.id))}
-                canEdit={hasRole(session, "ADMIN")}
-                onEdit={() => editTeam(team)}
-              />
-            ))}
-            {!event.groups.length && <Empty text="No event teams have been added yet." />}
-          </div>
+        <div className="event-template-team-list event-management-team-list">
+          {event.groups.map((team, index) => (
+            <EventTeamAccordionCard
+              key={team.id}
+              team={team}
+              index={index}
+              expanded={expandedTeamId === team.id}
+              canEdit={canEdit}
+              ministries={catalog.ministries}
+              leaders={teamLeaderOptions}
+              leaderNameById={leaderNameById}
+              onToggle={() => setExpandedTeamId(expandedTeamId === team.id ? "" : team.id)}
+              onSubmit={(formEvent) => saveTeam(team, formEvent)}
+              onDelete={() => deleteTeam(team)}
+              deleteDisabled={event.status === "ACTIVE" && event.groups.length <= 1}
+            />
+          ))}
+          {addingTeam && (
+            <EventTeamAccordionCard
+              index={event.groups.length}
+              expanded={expandedTeamId === "new"}
+              canEdit={canEdit}
+              ministries={catalog.ministries}
+              leaders={teamLeaderOptions}
+              leaderNameById={leaderNameById}
+              onToggle={() => setExpandedTeamId(expandedTeamId === "new" ? "" : "new")}
+              onSubmit={(formEvent) => saveTeam(null, formEvent)}
+              onCancel={() => {
+                setAddingTeam(false);
+                setExpandedTeamId(event.groups[0]?.id ?? "");
+              }}
+            />
+          )}
+          {!event.groups.length && !addingTeam && <Empty text="No event teams have been added yet." />}
         </div>
       </Card>
     </>
   );
 }
 
-function EventTeamRow({
+function EventTeamAccordionCard({
   team,
-  leaders,
+  index,
+  expanded,
   canEdit,
-  onEdit
+  ministries,
+  leaders,
+  leaderNameById,
+  onToggle,
+  onSubmit,
+  onDelete,
+  onCancel,
+  deleteDisabled = false
 }: {
-  team: EventGroupItem;
-  leaders: EventLeader[];
+  team?: EventGroupItem;
+  index: number;
+  expanded: boolean;
   canEdit: boolean;
-  onEdit: () => void;
+  ministries: Ministry[];
+  leaders: EventLeader[];
+  leaderNameById: Map<string, string>;
+  onToggle: () => void;
+  onSubmit: (formEvent: FormEvent<HTMLFormElement>) => void;
+  onDelete?: () => void;
+  onCancel?: () => void;
+  deleteDisabled?: boolean;
 }) {
+  const selectedLeaderIds = team?.leader_user_ids ?? [];
+  const leaderNames = selectedLeaderIds.map((id) => leaderNameById.get(id)).filter(Boolean);
+  const teamName = team?.name ?? "Open";
+
   return (
-    <div className="table-row event-team-row">
-      <span className="attention-icon blue">
-        <Users size={19} />
-      </span>
-      <span className="grow">
-        <strong>{team.name}</strong>
-        <small>{team.description || "No description"}</small>
-      </span>
-      {canEdit && (
-        <button className="secondary event-team-edit" onClick={onEdit}>
-          <Pencil size={15} /> Edit
+    <article className={["event-template-team-card", expanded ? "expanded" : "collapsed"].join(" ")}>
+      <div className="card-header">
+        <button className="event-template-team-toggle" type="button" aria-expanded={expanded} onClick={onToggle}>
+          <span className="eyebrow">Team {index + 1}</span>
+          <h3>{teamName}</h3>
+          <small>{team?.description || "No description"}</small>
         </button>
-      )}
-      <div className="team-card-metrics compact">
+        {canEdit && onDelete && (
+          <button
+            className="secondary danger"
+            type="button"
+            disabled={deleteDisabled}
+            title={deleteDisabled ? "An active event must have at least one event team" : `Delete ${teamName}`}
+            onClick={onDelete}
+          >
+            <Trash2 size={16} /> Delete
+          </button>
+        )}
+      </div>
+      <div className="team-card-metrics">
         <span>
-          <strong>{team.required_count}</strong>
+          <strong>{team?.required_count ?? 0}</strong>
           <small>Target</small>
         </span>
         <span>
-          <strong>{team.confirmed_count}</strong>
+          <strong>{team?.confirmed_count ?? 0}</strong>
           <small>Staffed</small>
         </span>
         <span>
-          <strong>{team.open_count}</strong>
+          <strong>{team?.open_count ?? 0}</strong>
           <small>Open</small>
         </span>
         <span>
-          <strong>{team.pending_count}</strong>
+          <strong>{team?.pending_count ?? 0}</strong>
           <small>Pending</small>
         </span>
       </div>
-      <span className={`policy ${team.signup_policy === "AUTO" ? "auto" : "approval"}`}>
-        {team.signup_policy === "AUTO" ? "Automatic" : "Approval"}
+      <span className={`policy ${team?.signup_policy === "APPROVAL" ? "approval" : "auto"}`}>
+        {team?.signup_policy === "APPROVAL" ? "Approval" : "Automatic"}
       </span>
       <span className="event-team-leaders">
         <small>Leaders</small>
-        <strong>
-          {leaders.length
-            ? leaders.map((leader) => leader.display_name || leader.email).join(", ")
-            : "No leaders assigned"}
-        </strong>
+        <strong>{leaderNames.length ? leaderNames.join(", ") : "No leaders assigned"}</strong>
       </span>
-    </div>
-  );
-}
-
-function EventTeamEditor({
-  event,
-  team,
-  close,
-  saved,
-  notify
-}: {
-  event: EventItem;
-  team: EventGroupItem | null;
-  close: () => void;
-  saved: () => void;
-  notify: (message: string) => void;
-}) {
-  const [leaders, setLeaders] = useState<EventLeader[]>([]);
-  useEffect(() => {
-    api<EventLeader[]>("/administration/team-leaders").then(setLeaders);
-  }, []);
-  const submit = async (formEvent: FormEvent<HTMLFormElement>) => {
-    formEvent.preventDefault();
-    const formData = new FormData(formEvent.currentTarget);
-    const data = Object.fromEntries(formData);
-    try {
-      await api(team ? `/event-groups/${team.id}` : `/events/${event.id}/groups`, {
-        method: team ? "PATCH" : "POST",
-        body: JSON.stringify({
-          name: data.name,
-          description: data.description,
-          instructions: data.instructions,
-          leaderUserIds: formData.getAll("teamLeaderUserIds"),
-          requiredVolunteerCount: Number(data.requiredVolunteerCount),
-          signupPolicy: data.signupPolicy,
-          movementPolicy: data.movementPolicy,
-          selfCheckinEnabled: data.selfCheckinEnabled === "on",
-          isActive: true
-        })
-      });
-      notify(team ? "Event team updated." : "Event team added.");
-      saved();
-    } catch (error) {
-      notify((error as Error).message);
-    }
-  };
-  return (
-    <div className="drawer-backdrop" onClick={close}>
-      <aside className="drawer" onClick={(clickEvent) => clickEvent.stopPropagation()}>
-        <button className="drawer-close" onClick={close}>
-          <X />
-        </button>
-        <span className="eyebrow">{event.name}</span>
-        <h2>{team ? "Manage event team" : "Add event team"}</h2>
-        <p>
-          {team
-            ? "Update this team's staffing and serving policies."
-            : "Create a team for volunteers serving at this event."}
-        </p>
-        <form className="drawer-form" onSubmit={submit}>
-          <Field name="name" label="Team name" defaultValue={team?.name} />
+      {expanded && canEdit && (
+        <form className="event-template-team-fields" onSubmit={onSubmit}>
+          <label>
+            Ministry
+            <select name="name" defaultValue={teamName} disabled={!canEdit} required>
+              <option value="Open">Open</option>
+              {teamName !== "Open" && !ministries.some((ministry) => ministry.name === teamName) && (
+                <option value={teamName}>{teamName}</option>
+              )}
+              {ministries.map((ministry) => (
+                <option key={ministry.id} value={ministry.name}>
+                  {ministry.name}
+                </option>
+              ))}
+            </select>
+            <small className="form-help">Open allows any volunteer from a participating campus to join.</small>
+          </label>
           <label>
             Description
-            <textarea name="description" rows={3} defaultValue={team?.description} required />
+            <textarea name="description" rows={2} defaultValue={team?.description ?? ""} required disabled={!canEdit} />
           </label>
           <label>
             Instructions
-            <textarea name="instructions" rows={3} defaultValue={team?.instructions} />
+            <textarea name="instructions" rows={2} defaultValue={team?.instructions ?? ""} disabled={!canEdit} />
           </label>
-          <Field
-            name="requiredVolunteerCount"
-            label="Volunteers required"
-            type="number"
-            defaultValue={team?.required_count ?? 0}
-          />
-          <LeaderSelector
-            leaders={leaders}
-            selectedIds={team?.leader_user_ids ?? []}
-            inputName="teamLeaderUserIds"
-            title="Team leaders"
-            searchPlaceholder="Search Administrators, Event Leaders, or Team Leaders"
-            emptyMessage="No active Administrators, Event Leaders, or Team Leaders are available."
-          />
           <div className="two-col">
+            <Field
+              name="requiredVolunteerCount"
+              label="Volunteers required"
+              type="number"
+              defaultValue={team?.required_count ?? 0}
+            />
             <label>
               Signup policy
-              <select name="signupPolicy" defaultValue={team?.signup_policy ?? "AUTO"}>
-                <option value="AUTO">Automatic confirmation</option>
-                <option value="APPROVAL">Leader approval</option>
-              </select>
-            </label>
-            <label>
-              Move/swap policy
-              <select name="movementPolicy" defaultValue={team?.movement_policy ?? "AUTO"}>
+              <select name="signupPolicy" defaultValue={team?.signup_policy ?? "AUTO"} disabled={!canEdit}>
                 <option value="AUTO">Automatic confirmation</option>
                 <option value="APPROVAL">Leader approval</option>
               </select>
             </label>
           </div>
+          <label>
+            Move/swap policy
+            <select name="movementPolicy" defaultValue={team?.movement_policy ?? "AUTO"} disabled={!canEdit}>
+              <option value="AUTO">Automatic confirmation</option>
+              <option value="APPROVAL">Leader approval</option>
+            </select>
+          </label>
+          <LeaderSelector
+            key={`event-team-leaders-${team?.id ?? "new"}-${selectedLeaderIds.join("|")}`}
+            leaders={leaders}
+            selectedIds={selectedLeaderIds}
+            inputName="teamLeaderUserIds"
+            title="Team leaders"
+            searchPlaceholder="Search Administrators, Event Leaders, Team Leaders, or Ministry Heads"
+            emptyMessage="No eligible team leaders match this event campus."
+          />
           <label className="check-label">
-            <input name="selfCheckinEnabled" type="checkbox" defaultChecked={team?.self_checkin_enabled ?? false} />
+            <input
+              name="selfCheckinEnabled"
+              type="checkbox"
+              defaultChecked={team?.self_checkin_enabled ?? false}
+              disabled={!canEdit}
+            />
             Enable location-bound self check-in
           </label>
-          <button className="primary full">{team ? "Save event team" : "Add event team"}</button>
+          <div className="card-actions">
+            {onCancel && (
+              <button className="secondary" type="button" onClick={onCancel}>
+                Cancel
+              </button>
+            )}
+            <button className="primary">{team ? "Save event team" : "Add event team"}</button>
+          </div>
         </form>
-      </aside>
-    </div>
+      )}
+    </article>
   );
 }
 
@@ -2354,6 +2597,11 @@ function EventDrawer({
     formEvent.preventDefault();
     const formData = new FormData(formEvent.currentTarget);
     const data = Object.fromEntries(formData);
+    const status = String(data.status) as EventStatus;
+    if (status === "ACTIVE" && teams.length < 1) {
+      notify("Add at least one event team before making this event Active.");
+      return;
+    }
     try {
       await api(`/events/${event.id}`, {
         method: "PATCH",
@@ -2371,7 +2619,7 @@ function EventDrawer({
           participatingCampusIds: event.participating_campus_ids?.length
             ? event.participating_campus_ids
             : [String(data.campusId)],
-          status: data.status
+          status
         })
       });
       notify("Event updated.");
@@ -3871,7 +4119,7 @@ function OneOffEventCreator({
     locationType === "CAMPUS" && campusId ? [campusId] : session.homeCampusIds.filter(Boolean);
   const selectedParticipantDefaultKey = selectedParticipantDefaults.join("|");
   const teamLeaderCampusId =
-    locationType === "CAMPUS" ? campusId : participatingCampusIds[0] ?? selectedParticipantDefaults[0] ?? "";
+    locationType === "CAMPUS" ? campusId : (participatingCampusIds[0] ?? selectedParticipantDefaults[0] ?? "");
   useEffect(() => {
     setParticipatingCampusIds(selectedParticipantDefaults);
   }, [selectedParticipantDefaultKey]);
@@ -3893,9 +4141,9 @@ function OneOffEventCreator({
   const resolveMinistryCampusLeadId = (teamName: string) =>
     teamName === "Open"
       ? ""
-      : catalog.ministries
+      : (catalog.ministries
           .find((ministry) => ministry.name === teamName)
-          ?.campus_leads?.find((lead) => lead.campus_id === teamLeaderCampusId)?.lead_user_id ?? "";
+          ?.campus_leads?.find((lead) => lead.campus_id === teamLeaderCampusId)?.lead_user_id ?? "");
   useEffect(() => {
     setTeams((current) =>
       current.map((team) => {

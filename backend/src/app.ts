@@ -1704,6 +1704,17 @@ const validateEventLeaderIds = (ids: string[]) => validateLeaderIds(ids, ["ADMIN
 const validateTeamLeaderIds = (ids: string[]) =>
   validateLeaderIds(ids, ["ADMIN", "EVENT_LEADER", "TEAM_LEADER", "MINISTRY_HEAD"], "team");
 
+async function ensureActiveEventHasTeams(client: { query: typeof pool.query }, eventId: string, status: string) {
+  if (status !== "ACTIVE") return;
+  const result = await client.query<{ count: number }>(
+    "select count(*)::int count from event_groups where event_id=$1 and is_active",
+    [eventId]
+  );
+  if ((result.rows[0]?.count ?? 0) < 1) {
+    throw new ApiError("An active event must have at least one event team", 422);
+  }
+}
+
 async function validateEventTemplate(body: z.infer<typeof eventTemplateInput>) {
   for (const team of body.teams) {
     const ministry = await get<{ id: string }>("select id from ministries where name=$1 and is_active", [team.name]);
@@ -2076,26 +2087,32 @@ app.patch(
       ...new Set(body.participatingCampusIds.length ? body.participatingCampusIds : [body.campusId])
     ];
     await validateCampusIds([body.campusId, ...participatingCampusIds]);
-    const event = await get<{ id: string }>(
-      `update events set campus_id=$1,name=$2,description=$3,starts_at=$4,ends_at=$5,address=$6,
-       latitude=$7,longitude=$8,event_leader_user_ids=$9,status=$10,location_type=$11,participating_campus_ids=$12
-       where id=$13 returning id`,
-      [
-        body.campusId,
-        body.name,
-        body.description,
-        startsAt.toISOString(),
-        endsAt.toISOString(),
-        body.address,
-        body.latitude,
-        body.longitude,
-        body.eventLeaderUserIds,
-        body.status,
-        body.locationType,
-        participatingCampusIds,
-        eventId
-      ]
-    );
+    const event = await transaction(async (client) => {
+      const updated = (
+        await client.query<{ id: string }>(
+          `update events set campus_id=$1,name=$2,description=$3,starts_at=$4,ends_at=$5,address=$6,
+           latitude=$7,longitude=$8,event_leader_user_ids=$9,status=$10,location_type=$11,participating_campus_ids=$12
+           where id=$13 returning id`,
+          [
+            body.campusId,
+            body.name,
+            body.description,
+            startsAt.toISOString(),
+            endsAt.toISOString(),
+            body.address,
+            body.latitude,
+            body.longitude,
+            body.eventLeaderUserIds,
+            body.status,
+            body.locationType,
+            participatingCampusIds,
+            eventId
+          ]
+        )
+      ).rows[0];
+      if (updated) await ensureActiveEventHasTeams(client, updated.id, body.status);
+      return updated;
+    });
     if (!event) return void res.status(404).json({ error: "Event not found" });
     await audit(req.user!.id, "EVENT_UPDATED", "event", event.id, body);
     res.json({ message: "Event updated" });
@@ -2235,9 +2252,28 @@ app.patch(
     if (!hasRole(req.user!, "ADMIN") && !existing.event_leader_user_ids.includes(req.user!.id)) {
       throw new ApiError("Outside your event scope", 403);
     }
-    await run("update events set status=$1 where id=$2", [status, eventId]);
+    await transaction(async (client) => {
+      await ensureActiveEventHasTeams(client, eventId, status);
+      await client.query("update events set status=$1 where id=$2", [status, eventId]);
+    });
     await audit(req.user!.id, "EVENT_STATUS_UPDATED", "event", existing.id, { status });
     res.json({ message: "Event status updated" });
+  })
+);
+
+app.delete(
+  "/api/events/:eventId",
+  requireAuth,
+  requireRole("ADMIN"),
+  route(async (req, res) => {
+    const eventId = uuid.parse(req.params.eventId);
+    const event = await get<{ id: string; name: string }>(
+      "update events set status='REMOVED' where id=$1 returning id,name",
+      [eventId]
+    );
+    if (!event) return void res.status(404).json({ error: "Event not found" });
+    await audit(req.user!.id, "EVENT_REMOVED", "event", event.id, { name: event.name });
+    res.json({ message: "Event removed" });
   })
 );
 
@@ -2279,26 +2315,64 @@ app.patch(
     const eventGroupId = uuid.parse(req.params.eventGroupId);
     const body = eventGroupInput.parse(req.body);
     await validateTeamLeaderIds(body.leaderUserIds);
-    const group = await get<{ id: string }>(
-      `update event_groups set name=$1,description=$2,instructions=$3,leader_user_ids=$4,
-       required_volunteer_count=$5,signup_policy=$6,movement_policy=$7,self_checkin_enabled=$8,is_active=$9
-       where id=$10 returning id`,
-      [
-        body.name,
-        body.description,
-        body.instructions,
-        body.leaderUserIds,
-        body.requiredVolunteerCount,
-        body.signupPolicy,
-        body.movementPolicy,
-        body.selfCheckinEnabled,
-        body.isActive,
-        eventGroupId
-      ]
-    );
+    const group = await transaction(async (client) => {
+      const updated = (
+        await client.query<{ id: string; event_id: string }>(
+          `update event_groups set name=$1,description=$2,instructions=$3,leader_user_ids=$4,
+           required_volunteer_count=$5,signup_policy=$6,movement_policy=$7,self_checkin_enabled=$8,is_active=$9
+           where id=$10 returning id,event_id`,
+          [
+            body.name,
+            body.description,
+            body.instructions,
+            body.leaderUserIds,
+            body.requiredVolunteerCount,
+            body.signupPolicy,
+            body.movementPolicy,
+            body.selfCheckinEnabled,
+            body.isActive,
+            eventGroupId
+          ]
+        )
+      ).rows[0];
+      if (updated) {
+        const event = (
+          await client.query<{ status: string }>("select status from events where id=$1", [updated.event_id])
+        ).rows[0];
+        if (event) await ensureActiveEventHasTeams(client, updated.event_id, event.status);
+      }
+      return updated;
+    });
     if (!group) return void res.status(404).json({ error: "Event team not found" });
     await audit(req.user!.id, "EVENT_GROUP_UPDATED", "event_group", group.id, body);
     res.json({ message: "Event team updated" });
+  })
+);
+
+app.delete(
+  "/api/event-groups/:eventGroupId",
+  requireAuth,
+  requireRole("ADMIN"),
+  route(async (req, res) => {
+    const eventGroupId = uuid.parse(req.params.eventGroupId);
+    const group = await transaction(async (client) => {
+      const updated = (
+        await client.query<{ id: string; event_id: string; name: string }>(
+          "update event_groups set is_active=false where id=$1 returning id,event_id,name",
+          [eventGroupId]
+        )
+      ).rows[0];
+      if (updated) {
+        const event = (
+          await client.query<{ status: string }>("select status from events where id=$1", [updated.event_id])
+        ).rows[0];
+        if (event) await ensureActiveEventHasTeams(client, updated.event_id, event.status);
+      }
+      return updated;
+    });
+    if (!group) return void res.status(404).json({ error: "Event team not found" });
+    await audit(req.user!.id, "EVENT_GROUP_REMOVED", "event_group", group.id, { name: group.name });
+    res.json({ message: "Event team removed" });
   })
 );
 

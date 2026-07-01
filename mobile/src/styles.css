@@ -1470,6 +1470,10 @@ main {
 .secondary.danger {
   color: #a75c4b;
 }
+.secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .full {
   width: 100%;
 }
@@ -1562,6 +1566,12 @@ main {
 .event-management-banner p {
   margin: 0;
   color: #52736b;
+}
+.event-management-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
 }
 .event-management-facts {
   display: grid;
@@ -1674,6 +1684,18 @@ main {
 .event-team-leaders strong {
   font-size: 0.74rem;
   line-height: 1.45;
+}
+.event-management-edit-form {
+  margin-bottom: 22px;
+}
+.event-management-team-list {
+  margin-top: 4px;
+}
+.event-template-team-toggle small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
 }
 .team-card-metrics span {
   padding: 10px;
