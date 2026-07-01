@@ -1556,10 +1556,10 @@ main {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 20px;
+  gap: 14px;
   align-items: center;
-  margin: 8px 0 28px;
-  padding: 28px 30px;
+  margin: 0 0 18px;
+  padding: 22px 26px;
   color: #123f3d;
   background: linear-gradient(135deg, #d9f3df, #c8edda);
   border: 1px solid #8cc7ac;
@@ -1569,7 +1569,7 @@ main {
   color: #397765;
 }
 .event-management-banner h2 {
-  margin: 0 0 7px;
+  margin: 0 0 4px;
 }
 .event-management-banner p {
   margin: 0;
@@ -1589,15 +1589,15 @@ main {
 .event-management-facts {
   display: grid;
   grid-template-columns: 220px 200px;
-  gap: 10px;
+  gap: 8px;
   justify-self: end;
 }
 .event-management-facts span {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
-  padding: 11px 12px;
+  padding: 9px 11px;
   background: #ffffff80;
   border: 1px solid #ffffffb8;
   border-radius: 11px;
@@ -1615,7 +1615,7 @@ main {
 }
 .event-management-facts .event-date-range {
   display: grid;
-  gap: 7px;
+  gap: 4px;
   padding: 0;
   background: none;
   border: 0;
@@ -3526,8 +3526,10 @@ form.audit-search {
     grid-template-columns: 1fr;
   }
   .event-management-banner {
-    padding: 22px;
-    border-radius: 18px;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding: 18px;
+    border-radius: 16px;
   }
   .event-management-facts {
     grid-template-columns: 1fr;
