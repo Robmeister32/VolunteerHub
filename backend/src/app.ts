@@ -318,6 +318,23 @@ app.get(
         '[]'::jsonb
       ) home_campuses,
       coalesce(
+        (select jsonb_agg(jsonb_build_object(
+          'id', urvs.id,
+          'campus_service_time_id', cst.id,
+          'campus_id', coalesce(cst.campus_id, matched_campus.id),
+          'campus_name', cst.campus_name,
+          'service_day', cst.service_day,
+          'service_time', to_char(cst.service_time, 'HH24:MI')
+        ) order by cst.campus_name, case cst.service_day
+          when 'Monday' then 1 when 'Tuesday' then 2 when 'Wednesday' then 3 when 'Thursday' then 4
+          when 'Friday' then 5 when 'Saturday' then 6 when 'Sunday' then 7 else 8 end, cst.service_time)
+         from user_recurring_volunteer_schedules urvs
+         join campus_service_times cst on cst.id=urvs.campus_service_time_id
+         left join campuses matched_campus on cst.campus_id is null and lower(matched_campus.name)=lower(cst.campus_name)
+         where urvs.user_id=u.id),
+        '[]'::jsonb
+      ) recurring_volunteer_schedule,
+      coalesce(
         (select array_agg(umm.ministry_id order by m.name)
          from user_ministry_memberships umm join ministries m on m.id=umm.ministry_id
          where umm.user_id=u.id),
@@ -378,12 +395,14 @@ app.patch(
         smsConsent: z.boolean().optional(),
         emailOptIn: z.boolean().optional(),
         pushOptIn: z.boolean().optional(),
-        homeCampusIds: z.array(uuid).optional()
+        homeCampusIds: z.array(uuid).optional(),
+        recurringVolunteerScheduleIds: z.array(uuid).optional()
       })
       .parse(req.body);
     await transaction(async (client) => {
+      let effectiveHomeCampusIds = body.homeCampusIds ? [...new Set(body.homeCampusIds)] : undefined;
       if (body.homeCampusIds !== undefined) {
-        const homeCampusIds = [...new Set(body.homeCampusIds)];
+        const homeCampusIds = effectiveHomeCampusIds ?? [];
         if (homeCampusIds.length) {
           const campusResult = await client.query<{ count: number }>(
             "select count(*)::int count from campuses where id=any($1::uuid[]) and is_active",
@@ -404,6 +423,36 @@ app.patch(
           homeCampusIds[0] ?? null,
           req.user!.id
         ]);
+      }
+      if (body.recurringVolunteerScheduleIds !== undefined) {
+        const recurringVolunteerScheduleIds = [...new Set(body.recurringVolunteerScheduleIds)];
+        if (!effectiveHomeCampusIds) {
+          effectiveHomeCampusIds = (
+            await client.query<{ campus_id: string }>(
+              "select campus_id from user_home_campuses where user_id=$1 order by is_primary desc, campus_id",
+              [req.user!.id]
+            )
+          ).rows.map((row) => row.campus_id);
+        }
+        if (recurringVolunteerScheduleIds.length) {
+          const serviceTimeResult = await client.query<{ count: number }>(
+            `select count(distinct cst.id)::int count
+             from campus_service_times cst
+             left join campuses matched_campus on cst.campus_id is null and lower(matched_campus.name)=lower(cst.campus_name)
+             where cst.id=any($1::uuid[])
+               and coalesce(cst.campus_id, matched_campus.id)=any($2::uuid[])`,
+            [recurringVolunteerScheduleIds, effectiveHomeCampusIds]
+          );
+          if (serviceTimeResult.rows[0]?.count !== recurringVolunteerScheduleIds.length)
+            throw new ApiError("One or more recurring volunteer schedules are not valid for your home campuses", 422);
+        }
+        await client.query("delete from user_recurring_volunteer_schedules where user_id=$1", [req.user!.id]);
+        for (const serviceTimeId of recurringVolunteerScheduleIds) {
+          await client.query(
+            "insert into user_recurring_volunteer_schedules(user_id, campus_service_time_id) values($1,$2)",
+            [req.user!.id, serviceTimeId]
+          );
+        }
       }
       if (req.user!.volunteerId) {
         await client.query(
@@ -638,6 +687,18 @@ app.get(
          concat_ws(', ', address_line_1, nullif(address_line_2, ''), city, region || ' ' || postal_code) address,
          latitude, longitude
          from campuses where is_active order by name`
+      ),
+      serviceTimes: await all(
+        `select st.id, coalesce(st.campus_id, matched_campus.id) campus_id, st.campus_name,
+         st.service_day, to_char(st.service_time, 'HH24:MI') service_time
+         from campus_service_times st
+         left join campuses c on c.id=st.campus_id
+         left join campuses matched_campus on st.campus_id is null and lower(matched_campus.name)=lower(st.campus_name)
+         where coalesce(c.is_active, matched_campus.is_active, false)
+         order by st.campus_name, case st.service_day
+           when 'Monday' then 1 when 'Tuesday' then 2 when 'Wednesday' then 3 when 'Thursday' then 4
+           when 'Friday' then 5 when 'Saturday' then 6 when 'Sunday' then 7 else 8 end,
+           st.service_time`
       ),
       ministries: await all(
         `select m.id, m.name, m.description, m.screener_score, m.is_active, m.created_at, m.updated_at,

@@ -202,8 +202,17 @@ interface CampusServiceTime {
   campus_name: string;
   service_day: string;
   service_time: string;
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface RecurringVolunteerSchedule {
+  id: string;
+  campus_service_time_id: string;
+  campus_id: string;
+  campus_name: string;
+  service_day: string;
+  service_time: string;
 }
 
 interface Ministry {
@@ -7067,14 +7076,21 @@ function RoleAssignmentMaintenance({ notify, close }: { notify: (m: string) => v
 function Profile({ notify }: { notify: (m: string) => void }) {
   const [profile, setProfile] = useState<Record<string, unknown>>({});
   const [campuses, setCampuses] = useState<CampusCatalogItem[]>([]);
+  const [serviceTimes, setServiceTimes] = useState<CampusServiceTime[]>([]);
+  const [selectedHomeCampusIds, setSelectedHomeCampusIds] = useState<string[]>([]);
+  const [recurringSchedules, setRecurringSchedules] = useState<RecurringVolunteerSchedule[]>([]);
+  const [scheduleFormOpen, setScheduleFormOpen] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<RecurringVolunteerSchedule | null>(null);
+  const [scheduleServiceTimeId, setScheduleServiceTimeId] = useState("");
   const [editing, setEditing] = useState(false);
   const [linkingFamily, setLinkingFamily] = useState(false);
   const load = () => api<Record<string, unknown>>("/me").then(setProfile);
   useEffect(() => {
     void load();
-    api<{ campuses: CampusCatalogItem[] }>("/catalog")
+    api<{ campuses: CampusCatalogItem[]; serviceTimes: CampusServiceTime[] }>("/catalog")
       .then((catalog) => {
         setCampuses(catalog.campuses);
+        setServiceTimes(catalog.serviceTimes ?? []);
       })
       .catch((error) => notify((error as Error).message));
   }, []);
@@ -7083,6 +7099,69 @@ function Profile({ notify }: { notify: (m: string) => void }) {
   const profileName =
     personName(profile.first_name, profile.middle_name, profile.last_name) ||
     String(profile.display_name || profile.email || "VolunteerHub user");
+  const startEditingProfile = () => {
+    const homeCampusIds = ((profile.home_campus_ids as string[]) ?? []).filter(Boolean);
+    setSelectedHomeCampusIds(homeCampusIds);
+    setRecurringSchedules(((profile.recurring_volunteer_schedule as RecurringVolunteerSchedule[]) ?? []).filter(Boolean));
+    setScheduleFormOpen(false);
+    setEditingSchedule(null);
+    setScheduleServiceTimeId("");
+    setEditing(true);
+  };
+  const cancelEditingProfile = () => {
+    setEditing(false);
+    setSelectedHomeCampusIds([]);
+    setRecurringSchedules([]);
+    closeScheduleForm();
+  };
+  const availableRecurringServiceTimes = serviceTimes.filter((serviceTime) =>
+    selectedHomeCampusIds.includes(serviceTime.campus_id)
+  );
+  const scheduleLabel = (schedule: Pick<CampusServiceTime, "campus_name" | "service_day" | "service_time">) =>
+    `${schedule.campus_name} • ${schedule.service_day} • ${formatServiceTime(schedule.service_time)}`;
+  const openScheduleForm = (schedule?: RecurringVolunteerSchedule) => {
+    setEditingSchedule(schedule ?? null);
+    setScheduleServiceTimeId(schedule?.campus_service_time_id ?? "");
+    setScheduleFormOpen(true);
+  };
+  const closeScheduleForm = () => {
+    setEditingSchedule(null);
+    setScheduleServiceTimeId("");
+    setScheduleFormOpen(false);
+  };
+  const saveScheduleRow = () => {
+    const serviceTime = availableRecurringServiceTimes.find((item) => item.id === scheduleServiceTimeId);
+    if (!serviceTime) return notify("Select a service time from your home campuses.");
+    const duplicate = recurringSchedules.some(
+      (schedule) => schedule.id !== editingSchedule?.id && schedule.campus_service_time_id === serviceTime.id
+    );
+    if (duplicate) return notify("This recurring volunteer schedule is already selected.");
+    const next: RecurringVolunteerSchedule = {
+      id: editingSchedule?.id ?? `new-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      campus_service_time_id: serviceTime.id,
+      campus_id: serviceTime.campus_id,
+      campus_name: serviceTime.campus_name,
+      service_day: serviceTime.service_day,
+      service_time: serviceTime.service_time
+    };
+    setRecurringSchedules((current) =>
+      editingSchedule ? current.map((schedule) => (schedule.id === editingSchedule.id ? next : schedule)) : [...current, next]
+    );
+    closeScheduleForm();
+  };
+  const deleteScheduleRow = (schedule: RecurringVolunteerSchedule) => {
+    if (!window.confirm(`Deleting recurring schedule ${scheduleLabel(schedule)}. Are you sure?`)) return;
+    setRecurringSchedules((current) => current.filter((item) => item.id !== schedule.id));
+    if (editingSchedule?.id === schedule.id) closeScheduleForm();
+  };
+  const handleHomeCampusChange = (homeCampusIds: string[]) => {
+    setSelectedHomeCampusIds(homeCampusIds);
+    setRecurringSchedules((current) => current.filter((schedule) => homeCampusIds.includes(schedule.campus_id)));
+    if (scheduleServiceTimeId) {
+      const selectedServiceTime = serviceTimes.find((serviceTime) => serviceTime.id === scheduleServiceTimeId);
+      if (selectedServiceTime && !homeCampusIds.includes(selectedServiceTime.campus_id)) closeScheduleForm();
+    }
+  };
   const save = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
     const formData = new FormData(formEvent.currentTarget);
@@ -7106,7 +7185,8 @@ function Profile({ notify }: { notify: (m: string) => void }) {
         };
     const payloadWithHomeCampuses = {
       ...payload,
-      homeCampusIds: formData.getAll("homeCampusIds").map(String)
+      homeCampusIds: formData.getAll("homeCampusIds").map(String),
+      recurringVolunteerScheduleIds: recurringSchedules.map((schedule) => schedule.campus_service_time_id)
     };
     try {
       await api("/me", {
@@ -7115,6 +7195,7 @@ function Profile({ notify }: { notify: (m: string) => void }) {
       });
       await load();
       setEditing(false);
+      closeScheduleForm();
       notify("Profile updated.");
     } catch (error) {
       notify((error as Error).message);
@@ -7160,7 +7241,7 @@ function Profile({ notify }: { notify: (m: string) => void }) {
               <p>{String(profile.email ?? "")}</p>
             </span>
             {!editing && (
-              <button className="secondary" onClick={() => setEditing(true)}>
+              <button className="secondary" onClick={startEditingProfile}>
                 <Pencil size={15} /> Edit profile
               </button>
             )}
@@ -7221,7 +7302,111 @@ function Profile({ notify }: { notify: (m: string) => void }) {
                 </div>
               )}
               <Field name="phone" label="Mobile phone" type="tel" defaultValue={String(profile.phone ?? "")} />
-              <CampusBubbleSelector campuses={campuses} selectedIds={(profile.home_campus_ids as string[]) ?? []} />
+              <CampusBubbleSelector
+                campuses={campuses}
+                selectedIds={(profile.home_campus_ids as string[]) ?? []}
+                onChange={handleHomeCampusChange}
+              />
+              <div className="service-time-form-section">
+                <div className="service-time-heading">
+                  <span>Recurring volunteer schedule</span>
+                  <button
+                    className="icon-button service-time-action"
+                    type="button"
+                    title="Add recurring schedule"
+                    aria-label="Add recurring schedule"
+                    disabled={!availableRecurringServiceTimes.length}
+                    onClick={() => openScheduleForm()}
+                  >
+                    <Plus size={17} />
+                  </button>
+                </div>
+                <div className="service-time-table recurring-schedule-table" role="table" aria-label="Recurring volunteer schedule">
+                  <div className="service-time-row recurring-schedule-row service-time-header" role="row">
+                    <span role="columnheader">Campus</span>
+                    <span role="columnheader">Day</span>
+                    <span role="columnheader">Time</span>
+                    <span role="columnheader" aria-label="Actions" />
+                  </div>
+                  {scheduleFormOpen && (
+                    <div className="service-time-row recurring-schedule-row service-time-form-row" role="row">
+                      <label className="recurring-schedule-select-cell">
+                        <span className="sr-only">Service time</span>
+                        <select
+                          value={scheduleServiceTimeId}
+                          onChange={(event) => setScheduleServiceTimeId(event.target.value)}
+                        >
+                          <option value="">Select schedule</option>
+                          {availableRecurringServiceTimes.map((serviceTime) => (
+                            <option key={serviceTime.id} value={serviceTime.id}>
+                              {scheduleLabel(serviceTime)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <span aria-hidden="true" />
+                      <span aria-hidden="true" />
+                      <span className="service-time-actions">
+                        <button
+                          className="icon-button service-time-action"
+                          type="button"
+                          title="Save recurring schedule"
+                          aria-label="Save recurring schedule"
+                          onClick={saveScheduleRow}
+                        >
+                          <Check size={16} />
+                        </button>
+                        <button
+                          className="icon-button service-time-action"
+                          type="button"
+                          title="Cancel"
+                          aria-label="Cancel"
+                          onClick={closeScheduleForm}
+                        >
+                          <X size={16} />
+                        </button>
+                      </span>
+                    </div>
+                  )}
+                  {recurringSchedules.map((schedule) => (
+                    <div className="service-time-row recurring-schedule-row" role="row" key={schedule.id}>
+                      <span role="cell">{schedule.campus_name}</span>
+                      <span role="cell">{schedule.service_day}</span>
+                      <span role="cell">{formatServiceTime(schedule.service_time)}</span>
+                      <span className="service-time-actions" role="cell">
+                        <button
+                          className="icon-button service-time-action"
+                          type="button"
+                          title="Edit recurring schedule"
+                          aria-label={`Edit ${scheduleLabel(schedule)}`}
+                          onClick={() => openScheduleForm(schedule)}
+                        >
+                          <Pencil size={15} />
+                        </button>
+                        <button
+                          className="icon-button service-time-action danger"
+                          type="button"
+                          title="Delete recurring schedule"
+                          aria-label={`Delete ${scheduleLabel(schedule)}`}
+                          onClick={() => deleteScheduleRow(schedule)}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+                  {!recurringSchedules.length && !scheduleFormOpen && (
+                    <div className="service-time-empty">
+                      {selectedHomeCampusIds.length
+                        ? "No recurring volunteer schedule selected."
+                        : "Add a home campus before selecting a recurring schedule."}
+                    </div>
+                  )}
+                </div>
+                {!availableRecurringServiceTimes.length && selectedHomeCampusIds.length > 0 && (
+                  <small className="form-help">No service times are configured for the selected home campuses.</small>
+                )}
+              </div>
               <ReadonlyMinistryBubbles
                 memberships={(profile.ministry_memberships as Array<Pick<Ministry, "id" | "name">>) ?? []}
               />
@@ -7258,7 +7443,7 @@ function Profile({ notify }: { notify: (m: string) => void }) {
                 </>
               )}
               <div className="profile-form-actions">
-                <button className="secondary" type="button" onClick={() => setEditing(false)}>
+                <button className="secondary" type="button" onClick={cancelEditingProfile}>
                   Cancel
                 </button>
                 <button className="primary">Save profile</button>

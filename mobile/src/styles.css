@@ -3000,6 +3000,12 @@ form.audit-search {
   min-height: 43px;
   border-bottom: 1px solid #edf1ee;
 }
+.recurring-schedule-row {
+  grid-template-columns: minmax(85px, 1fr) minmax(78px, 0.8fr) minmax(72px, 0.7fr) auto;
+}
+.recurring-schedule-select-cell {
+  grid-column: 1 / 4;
+}
 .service-time-row:last-child {
   border-bottom: 0;
 }
@@ -3698,6 +3704,12 @@ form.audit-search {
   }
   .service-time-row {
     grid-template-columns: minmax(90px, 1fr) minmax(85px, 0.9fr) auto;
+  }
+  .recurring-schedule-row {
+    grid-template-columns: minmax(72px, 1fr) minmax(72px, 0.8fr) minmax(68px, 0.7fr) auto;
+  }
+  .recurring-schedule-select-cell {
+    grid-column: 1 / 4;
   }
   .service-time-row > span,
   .service-time-row > label {
